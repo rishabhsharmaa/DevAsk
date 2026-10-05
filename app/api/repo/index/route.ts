@@ -34,7 +34,7 @@ async function indexRepoBackground(
       throw new Error('No indexable files found in this repository.');
     }
 
-    // 4. Generate embeddings (using OpenAI text-embedding-3-small)
+    // 4. Generate embeddings (using Voyage voyage-code-4)
     const chunkContents = chunks.map((c) => c.content);
     const embeddings = await generateEmbeddings(chunkContents);
 

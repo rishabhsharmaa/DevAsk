@@ -3,6 +3,7 @@ import { auth } from '@clerk/nextjs/server';
 import { supabaseAdmin } from '@/lib/supabase/service';
 import { retrieveRelevantChunks, buildContextPrompt } from '@/lib/rag/retriever';
 import { streamChat } from '@/lib/llm';
+import { extractLastUserText } from '@/lib/llm/extract-user-text';
 import { PLAN_LIMITS } from '@/types';
 import type { ModelMessage } from 'ai';
 
@@ -14,11 +15,23 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { repo_id, conversation_id, message, provider, api_key } = body;
+    const { repo_id, conversation_id, message, messages: clientMessages, provider, api_key } = body;
 
-    if (!repo_id || !message || !provider || !api_key) {
+    // DefaultChatTransport posts the conversation as `messages[]` (UIMessage
+    // with parts); direct API callers may send top-level `message` instead.
+    const userText =
+      typeof message === 'string' && message.trim().length > 0
+        ? message.trim()
+        : extractLastUserText(clientMessages);
+
+    const missing: string[] = [];
+    if (!repo_id) missing.push('repo_id');
+    if (!userText) missing.push('message text');
+    if (!provider) missing.push('provider');
+    if (!api_key) missing.push('api_key');
+    if (!repo_id || !userText || !provider || !api_key) {
       return NextResponse.json(
-        { error: 'repo_id, message, provider, and api_key are required.' },
+        { error: `Missing required fields: ${missing.join(', ')}.` },
         { status: 400 }
       );
     }
@@ -71,7 +84,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 4. Retrieve context chunks from vector store
-    const chunks = await retrieveRelevantChunks(repo_id, message, 10);
+    const chunks = await retrieveRelevantChunks(repo_id, userText, 10);
 
     // 5. Fetch recent messages for conversation history
     const { data: dbMessages, error: msgError } = await supabaseAdmin
@@ -97,14 +110,14 @@ export async function POST(req: NextRequest) {
     // Append current user message
     const coreMessages: ModelMessage[] = [
       ...history,
-      { role: 'user', content: message },
+      { role: 'user', content: userText },
     ];
 
     // 6. Save current user message to DB
     const { error: userInsertError } = await supabaseAdmin.from('messages').insert({
       conversation_id: conversationId,
       role: 'user',
-      content: message,
+      content: userText,
     });
 
     if (userInsertError) {
@@ -145,8 +158,11 @@ export async function POST(req: NextRequest) {
     response.headers.set('x-conversation-id', conversationId);
     
     return response;
-  } catch (error: any) {
+  } catch (error) {
     console.error('API chat error:', error);
-    return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal Server Error' },
+      { status: 500 }
+    );
   }
 }

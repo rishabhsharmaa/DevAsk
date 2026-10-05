@@ -1,13 +1,13 @@
 'use client';
 
-import React, { useState, useEffect, use } from 'react';
+import React, { useState, useEffect, use, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useUser } from '@clerk/nextjs';
+import { useUser, useAuth } from '@clerk/nextjs';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { ArrowLeft, RefreshCw, AlertTriangle, FileCode, CheckCircle2 } from 'lucide-react';
-import { supabase } from '@/lib/supabase/client';
+import { supabase, setBrowserTokenGetter } from '@/lib/supabase/client';
 import { FileExplorer } from '@/components/file-explorer';
 import { ChatInput } from '@/components/chat/chat-input';
 import { MessageList } from '@/components/chat/message-list';
@@ -17,6 +17,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@/components/ui/button';
 import { LLMProvider, Plan, Repo, SourceChunk, Message } from '@/types';
 
+/** DB message mapped into the chat shape (assignable to the AI SDK UIMessage). */
+interface ChatMessageInit {
+  id: string;
+  role: 'user' | 'assistant';
+  parts: { type: 'text'; text: string }[];
+  metadata: { source_chunks: SourceChunk[] | null };
+}
+
 export default function RepoChatPage({
   params,
 }: {
@@ -24,10 +32,17 @@ export default function RepoChatPage({
 }) {
   const router = useRouter();
   const { user, isLoaded: authLoaded } = useUser();
+  const { getToken } = useAuth();
   const { id: repoId } = use(params);
+
+  // Register the Clerk JWT getter before any query fires (runs first on mount).
+  useEffect(() => {
+    setBrowserTokenGetter(getToken);
+  }, [getToken]);
 
   // DB States
   const [repo, setRepo] = useState<Repo | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [files, setFiles] = useState<{ path: string }[]>([]);
   const [plan, setPlan] = useState<Plan>('free');
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -41,43 +56,7 @@ export default function RepoChatPage({
   const [apiKey, setApiKey] = useState('');
   const [activeCodeViewer, setActiveCodeViewer] = useState<{ path: string; content: string } | null>(null);
   const [activeCitation, setActiveCitation] = useState<SourceChunk | null>(null);
-
-  // Load User, Plan, and Repo metadata on mount
-  useEffect(() => {
-    if (!authLoaded || !user) return;
-    const userId = user.id;
-
-    async function loadData() {
-      try {
-        // 1. Load User Plan details
-        const { data: userRow } = await supabase
-          .from('users')
-          .select('plan')
-          .eq('id', userId)
-          .single();
-        if (userRow) setPlan(userRow.plan as Plan);
-
-        // 2. Load Repo Status
-        const { data: repoRow } = await supabase
-          .from('repos')
-          .select('*')
-          .eq('id', repoId)
-          .single();
-
-        if (repoRow) {
-          setRepo(repoRow as Repo);
-          
-          if (repoRow.index_status === 'ready') {
-            loadFilesAndHistory(userId);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load initial data:', err);
-      }
-    }
-
-    loadData();
-  }, [user, authLoaded, repoId]);
+  const [initialMessages, setInitialMessages] = useState<ChatMessageInit[]>([]);
 
   // Load files and existing chat history
   async function loadFilesAndHistory(userId: string) {
@@ -128,6 +107,49 @@ export default function RepoChatPage({
     }
   }
 
+  // Load User, Plan, and Repo metadata on mount
+  useEffect(() => {
+    if (!authLoaded || !user) return;
+    const userId = user.id;
+
+    async function loadData() {
+      try {
+        // 1. Load User Plan details
+        const { data: userRow } = await supabase
+          .from('users')
+          .select('plan')
+          .eq('id', userId)
+          .single();
+        if (userRow) setPlan(userRow.plan as Plan);
+
+        // 2. Load Repo Status
+        const { data: repoRow, error: repoError } = await supabase
+          .from('repos')
+          .select('*')
+          .eq('id', repoId)
+          .single();
+
+        if (repoError || !repoRow) {
+          setLoadError(
+            repoError?.message ||
+              'Repository not found or you no longer have access to it.'
+          );
+          return;
+        }
+        setRepo(repoRow as Repo);
+
+        if (repoRow.index_status === 'ready') {
+          loadFilesAndHistory(userId);
+        }
+      } catch (err) {
+        console.error('Failed to load initial data:', err);
+        setLoadError(err instanceof Error ? err.message : 'Failed to load repository.');
+      }
+    }
+
+    loadData();
+  }, [user, authLoaded, repoId]);
+
   // Poll indexing status if not ready
   useEffect(() => {
     if (!repo || repo.index_status === 'ready' || repo.index_status === 'failed') return;
@@ -163,33 +185,38 @@ export default function RepoChatPage({
     return () => clearInterval(interval);
   }, [repo, repoId, user]);
 
-  // Vercel AI SDK useChat Configuration
-  const [initialMessages, setInitialMessages] = useState<any[]>([]);
+  // Static chat transport. useChat instantiates its Chat (and captures our
+  // transport) exactly once on first render, so request fields MUST NOT come
+  // from a body() closure over state — it would send first-render values
+  // forever (notably api_key: '', rejected with 400). Instead the transport
+  // carries no body and each sendMessage() passes fresh values via its
+  // per-request `body` option, which the transport merges at top level.
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport<ChatMessageInit>({
+        api: '/api/chat',
+        fetch: async (input, init) => {
+          const response = await globalThis.fetch(input, init);
+          // Extract conversation ID from response headers if newly created
+          const headerConvId = response.headers.get('x-conversation-id');
+          if (headerConvId) {
+            setConversationId((prev) => prev ?? headerConvId);
+          }
+          return response;
+        },
+      }),
+    []
+  );
 
+  // Vercel AI SDK useChat Configuration
   const {
     messages,
     status,
     sendMessage,
     setMessages,
+    error: chatError,
   } = useChat({
-    transport: new DefaultChatTransport({
-      api: '/api/chat',
-      body: () => ({
-        repo_id: repoId,
-        provider,
-        api_key: apiKey,
-        conversation_id: conversationId,
-      }),
-      fetch: async (input, init) => {
-        const response = await globalThis.fetch(input, init);
-        // Extract conversation ID from response headers if newly created
-        const headerConvId = response.headers.get('x-conversation-id');
-        if (headerConvId && !conversationId) {
-          setConversationId(headerConvId);
-        }
-        return response;
-      },
-    }),
+    transport,
     messages: initialMessages,
     onFinish: ({ message }) => {
       // Refetch history to sync database message IDs and source chunk citations
@@ -212,7 +239,9 @@ export default function RepoChatPage({
       conversation_id: conversationId || '',
       role: m.role as 'user' | 'assistant',
       content: content,
-      source_chunks: (m.metadata as any)?.source_chunks || null,
+      source_chunks:
+        (m.metadata as { source_chunks?: SourceChunk[] | null } | undefined)
+          ?.source_chunks || null,
       created_at: '',
     };
   });
@@ -240,7 +269,7 @@ export default function RepoChatPage({
           source_chunks: m.source_chunks,
         },
       }));
-      setMessages(formatted as any);
+      setMessages(formatted);
     }
   }
 
@@ -250,9 +279,17 @@ export default function RepoChatPage({
       alert('Please enter your LLM API key first.');
       return;
     }
-    sendMessage({
-      text: question,
-    });
+    sendMessage(
+      { text: question },
+      {
+        body: {
+          repo_id: repoId,
+          provider,
+          api_key: apiKey,
+          conversation_id: conversationId,
+        },
+      }
+    );
   };
 
   // Handle chat submission
@@ -261,9 +298,17 @@ export default function RepoChatPage({
       alert('Please enter your LLM API key first.');
       return;
     }
-    sendMessage({
-      text: text,
-    });
+    sendMessage(
+      { text: text },
+      {
+        body: {
+          repo_id: repoId,
+          provider,
+          api_key: apiKey,
+          conversation_id: conversationId,
+        },
+      }
+    );
   };
 
   // Open file content explorer
@@ -283,10 +328,28 @@ export default function RepoChatPage({
       // Reconstruct file by stitching chunks together
       const fullContent = chunks.map((c) => c.content.replace(/^\/\/ File: .*\n/, '')).join('\n');
       setActiveCodeViewer({ path: filePath, content: fullContent });
-    } catch (err: any) {
-      alert(`Could not fetch file contents: ${err.message}`);
+    } catch (err) {
+      alert(
+        `Could not fetch file contents: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   };
+
+  // Load-failure UI (an actionable error instead of an infinite spinner)
+  if (loadError) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 bg-background max-w-md mx-auto text-center">
+        <div className="w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center mb-4 border border-destructive/20">
+          <AlertTriangle className="w-6 h-6 text-destructive" />
+        </div>
+        <h3 className="text-lg font-semibold mb-2">Couldn&apos;t load repository</h3>
+        <p className="text-sm text-muted-foreground mb-6">{loadError}</p>
+        <Button onClick={() => router.push('/dashboard')} variant="outline">
+          Back to Dashboard
+        </Button>
+      </div>
+    );
+  }
 
   // Loading UI screen
   if (!repo) {
@@ -382,6 +445,15 @@ export default function RepoChatPage({
 
         {/* Input Bar */}
         <div className="px-6 py-4 border-t border-border bg-background">
+          {chatError && (
+            <div
+              role="alert"
+              className="mb-2 flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+            >
+              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <span>Failed to send message: {chatError.message}</span>
+            </div>
+          )}
           <ChatInput
             onSubmit={handleChatSubmit}
             isLoading={isLoading}

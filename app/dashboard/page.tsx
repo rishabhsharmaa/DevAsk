@@ -2,10 +2,10 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { useUser } from '@clerk/nextjs';
+import { useUser, useAuth } from '@clerk/nextjs';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Github, FolderPlus, CreditCard, Sparkles, AlertTriangle, ShieldCheck, Check } from 'lucide-react';
-import { supabase } from '@/lib/supabase/client';
+import { supabase, setBrowserTokenGetter } from '@/lib/supabase/client';
 import { RepoCard } from '@/components/repo-card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -14,17 +14,44 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import type { Repo, Plan, CheckoutResponse } from '@/types';
 
-// Declare global Razorpay interface for popup checkout
+// Razorpay popup checkout (loaded via script tag at runtime)
+interface RazorpayCheckoutResponse {
+  razorpay_order_id: string;
+  razorpay_payment_id: string;
+  razorpay_signature: string;
+}
+
+interface RazorpayCheckoutOptions {
+  key?: string;
+  amount?: number;
+  currency?: string;
+  name: string;
+  description: string;
+  order_id?: string;
+  handler: (response: RazorpayCheckoutResponse) => void;
+  theme: { color: string };
+}
+
+interface RazorpayInstance {
+  open(): void;
+}
+
 declare global {
   interface Window {
-    Razorpay: any;
+    Razorpay: new (options: RazorpayCheckoutOptions) => RazorpayInstance;
   }
 }
 
 export default function DashboardPage() {
   const router = useRouter();
   const { user } = useUser();
+  const { getToken } = useAuth();
   const queryClient = useQueryClient();
+
+  // Register the Clerk JWT getter before any query fires (runs first on mount).
+  useEffect(() => {
+    setBrowserTokenGetter(getToken);
+  }, [getToken]);
 
   // Dialog state
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -52,7 +79,7 @@ export default function DashboardPage() {
   const plan = (userRow?.plan || 'free') as Plan;
 
   // React Query: Fetch indexed repositories
-  const { data: repos, isLoading: isReposLoading } = useQuery<Repo[]>({
+  const { data: repos, isLoading: isReposLoading, error: reposError } = useQuery<Repo[]>({
     queryKey: ['repos', user?.id],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -88,7 +115,7 @@ export default function DashboardPage() {
       setErrorMsg('');
       router.push(`/repo/${data.repo_id}`);
     },
-    onError: (err: any) => {
+    onError: (err) => {
       setErrorMsg(err.message || 'Verification failed. Make sure the URL exists.');
     },
   });
@@ -113,8 +140,8 @@ export default function DashboardPage() {
       if (!res.ok) throw new Error(data.error);
 
       queryClient.invalidateQueries({ queryKey: ['repos'] });
-    } catch (err: any) {
-      alert(`Reindexing failed: ${err.message}`);
+    } catch (err) {
+      alert(`Reindexing failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -133,8 +160,8 @@ export default function DashboardPage() {
       if (error) throw error;
 
       queryClient.invalidateQueries({ queryKey: ['repos'] });
-    } catch (err: any) {
-      alert(`Failed to delete repo: ${err.message}`);
+    } catch (err) {
+      alert(`Failed to delete repo: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -176,7 +203,7 @@ export default function DashboardPage() {
           name: 'DevAsk Pro',
           description: 'Unlimited codebase indexing subscription',
           order_id: data.order_id,
-          handler: async function (response: any) {
+          handler: async function (response: RazorpayCheckoutResponse) {
             // Call verify API
             const verifyRes = await fetch('/api/payments/razorpay/verify', {
               method: 'POST',
@@ -203,8 +230,8 @@ export default function DashboardPage() {
         const rzp = new window.Razorpay(options);
         rzp.open();
       }
-    } catch (err: any) {
-      alert(`Checkout failed: ${err.message}`);
+    } catch (err) {
+      alert(`Checkout failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsUpgrading(false);
     }
@@ -240,6 +267,20 @@ export default function DashboardPage() {
           )}
         </div>
       </section>
+
+      {/* Query failure banner (e.g. Supabase auth misconfigured) */}
+      {reposError && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
+          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <span>
+            Failed to load repositories: {(reposError as Error).message}. If this
+            persists, check that Supabase trusts your Clerk JWTs (Authentication → Third-Party Auth).
+          </span>
+        </div>
+      )}
 
       {/* Main Action Header */}
       <div className="flex items-center justify-between">

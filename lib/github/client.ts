@@ -51,10 +51,14 @@ export interface GitHubFile {
 
 /**
  * Create an authenticated Octokit client.
- * Uses the user's GitHub OAuth token for private repos, or unauthenticated for public.
+ * Prefers the user's GitHub OAuth token (private repos), falls back to the
+ * server-side GITHUB_TOKEN PAT, else unauthenticated (public repos only).
+ * Authenticated requests get 5,000/hr vs 60/hr unauthenticated — indexing
+ * any real repo exceeds the anonymous quota, so the fallback matters.
  */
 export function createOctokitClient(token?: string | null): Octokit {
-  return new Octokit(token ? { auth: token } : undefined);
+  const auth = token || process.env.GITHUB_TOKEN || undefined;
+  return new Octokit(auth ? { auth } : undefined);
 }
 
 /**
@@ -169,6 +173,17 @@ export async function fetchAllFiles(
     for (const result of results) {
       if (result.status === 'fulfilled') {
         files.push(result.value);
+        continue;
+      }
+      // Auth / rate-limit failures abort loudly: silently skipping here
+      // would produce an empty index with a misleading error downstream.
+      const status = (result.reason as { status?: number } | null)?.status;
+      if (status === 401 || status === 403 || status === 429) {
+        throw new Error(
+          `GitHub API access denied or rate-limited (HTTP ${status}). ` +
+            'Unauthenticated requests get 60/hour, which one repo index can exhaust. ' +
+            'Set GITHUB_TOKEN in .env (a personal access token — no scopes needed for public repos) and retry.'
+        );
       }
       // Silently skip files that fail to fetch (e.g., encoding issues)
     }

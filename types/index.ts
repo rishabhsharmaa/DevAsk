@@ -55,7 +55,7 @@ export interface Chunk {
   repo_id: string;
   file_path: string;
   content: string;
-  // embedding is vector(1536) — not sent to client, only used server-side
+  // embedding is vector(1024) — not sent to client, only used server-side
   created_at: string;
 }
 
