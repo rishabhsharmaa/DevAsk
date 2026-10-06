@@ -72,15 +72,15 @@ Pasting a repo URL into a general LLM gets you a README summary and guesses. Dev
 
 ```mermaid
 flowchart TB
-    User([Developer]) -->|HTTPS| Next["Next.js 16 App Router\n(server + client components)"]
-    Next -->|auth() / UserButton| Clerk["Clerk\n(auth + sessions)"]
-    Next -->|anon key + Clerk JWT| SB[(Supabase\nPostgres + pgvector)]
-    Next -->|service_role (server only)| SB
-    Next -->|Octokit + GITHUB_TOKEN| GH["GitHub API\n(tree + contents)"]
-    Next -->|VOYAGE_API_KEY| Voyage["Voyage AI\nvoyage-code-4 embeddings"]
-    Next -->|user BYOK per request| LLM["LLM providers\nOpenAI · Anthropic · Gemini"]
-    Next -->|ipapi.co country detect| Pay["Stripe (global)\nRazorpay (India)"]
-    Pay -->|webhooks| Next
+    User(["Developer"]) -->|"HTTPS"| Next["Next.js 16 App Router\n(server + client components)"]
+    Next -->|"auth() / UserButton"| Clerk["Clerk\n(auth + sessions)"]
+    Next -->|"anon key + Clerk JWT"| SB[("Supabase\nPostgres + pgvector")]
+    Next -->|"service_role (server only)"| SB
+    Next -->|"Octokit + GITHUB_TOKEN"| GH["GitHub API\n(tree + contents)"]
+    Next -->|"VOYAGE_API_KEY"| Voyage["Voyage AI\nvoyage-code-4 embeddings"]
+    Next -->|"user BYOK per request"| LLM["LLM providers\nOpenAI · Anthropic · Gemini"]
+    Next -->|"ipapi.co country detect"| Pay["Stripe (global)\nRazorpay (India)"]
+    Pay -->|"webhooks"| Next
 ```
 
 **Component responsibilities:**
@@ -111,7 +111,7 @@ sequenceDiagram
     participant VY as Voyage AI
     participant DB as Supabase
 
-    D->>UI: Paste repo URL, click "Index"
+    D->>UI: Paste repo URL, click 'Index'
     UI->>API: { url }
     API->>DB: auth check, ensure user row, enforce plan repo limit
     API->>DB: insert repos row (status: pending)
@@ -164,14 +164,14 @@ Key details:
 
 ```mermaid
 flowchart LR
-    A[Visitor] --> L[Landing /]
-    A --> S[Clerk Sign-in/up\nprebuilt components]
-    S -->|session JWT| P{{proxy.ts}}
-    P -->|public: /, /sign-in, /sign-up, webhooks| OK[Allow]
-    P -->|protected: /dashboard, /repo/*, /api/*| G{auth.protect}
-    G -->|signed in| App[Dashboard / Repo pages]
-    G -->|signed out| S
-    App -->|anon key + Clerk JWT| RLS[(Supabase RLS\nuser_id = JWT sub)]
+    A["Visitor"] --> L["Landing /"]
+    A --> S["Clerk Sign-in/up\nprebuilt components"]
+    S -->|"session JWT"| P{{"proxy.ts"}}
+    P -->|"public: /, /sign-in, /sign-up, webhooks"| OK["Allow"]
+    P -->|"protected: /dashboard, /repo/*, /api/*"| G{"auth.protect"}
+    G -->|"signed in"| App["Dashboard / Repo pages"]
+    G -->|"signed out"| S
+    App -->|"anon key + Clerk JWT"| RLS[("Supabase RLS\nuser_id = JWT sub")]
 ```
 
 - Server components/layouts call `auth()`; API routes reject unauthenticated callers (browser hits get a Clerk redirect via `auth.protect()` in `proxy.ts`).
@@ -182,15 +182,15 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    U[Upgrade click] --> C[POST /api/payments/checkout]
-    C --> IP{ipapi.co country?}
-    IP -->|IN| R[Create Razorpay order ₹499]
-    IP -->|other/localhost| S[Create Stripe session $9]
-    R --> RP[Razorpay popup] --> V[POST /verify\nHMAC check] --> Pro1[(plan=pro, +32d)]
-    RP -->|payment.captured| WH1[Razorpay webhook\nHMAC check] --> Pro1
-    S --> SU[Stripe hosted page] -->|checkout.session.completed| WH2[Stripe webhook\nsignature check] --> Pro2[(plan=pro, +32d)]
-    WH2 -->|invoice.paid| Renew[Extend +32d]
-    WH2 -->|subscription.deleted| Downgrade[(plan=free)]
+    U["Upgrade click"] --> C["POST /api/payments/checkout"]
+    C --> IP{"ipapi.co country?"}
+    IP -->|"IN"| R["Create Razorpay order ₹499"]
+    IP -->|"other/localhost"| S["Create Stripe session $9"]
+    R --> RP["Razorpay popup"] --> V["POST /verify\nHMAC check"] --> Pro1[("plan=pro, +32d")]
+    RP -->|"payment.captured"| WH1["Razorpay webhook\nHMAC check"] --> Pro1
+    S --> SU["Stripe hosted page"] -->|"checkout.session.completed"| WH2["Stripe webhook\nsignature check"] --> Pro2[("plan=pro, +32d")]
+    WH2 -->|"invoice.paid"| Renew["Extend +32d"]
+    WH2 -->|"subscription.deleted"| Downgrade[("plan=free")]
 ```
 
 Routing is fully automatic — the user never picks a provider.
