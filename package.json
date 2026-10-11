@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "NEXT_PUBLIC_SUPABASE_URL=https://supabase.test.local SUPABASE_SERVICE_ROLE_KEY=test-placeholder-key tsx --test tests/embedder.test.ts",
+    "test": "NEXT_PUBLIC_SUPABASE_URL=https://supabase.test.local SUPABASE_SERVICE_ROLE_KEY=test-placeholder-key tsx --test tests/embedder.test.ts tests/payments.test.ts",
     "benchmark:embeddings": "tsx scripts/benchmark-local-embeddings.ts"
   },
   "dependencies": {

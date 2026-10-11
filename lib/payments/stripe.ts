@@ -3,13 +3,33 @@ import Stripe from 'stripe';
 /**
  * Stripe payment adapter.
  * Creates a hosted checkout session for Pro plan subscriptions.
- * 
+ *
  * Price: $9/mo USD
+ *
+ * The client is created lazily (see getStripe): constructing it at module
+ * level throws when STRIPE_SECRET_KEY is unset, which breaks `next build`
+ * (page-data collection imports every route) on deployments that don't
+ * configure payments. Missing keys now fail only when checkout is actually
+ * used — with a clear message instead of a build error.
  */
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2026-06-24.dahlia',
-});
+let stripeInstance: Stripe | null = null;
+
+/** Lazily create (and cache) the Stripe client. Throws clearly when unconfigured. */
+function getStripe(): Stripe {
+  if (!stripeInstance) {
+    const apiKey = process.env.STRIPE_SECRET_KEY;
+    if (!apiKey) {
+      throw new Error(
+        'Stripe is not configured (missing STRIPE_SECRET_KEY). Set it to enable checkout.'
+      );
+    }
+    stripeInstance = new Stripe(apiKey, {
+      apiVersion: '2026-06-24.dahlia',
+    });
+  }
+  return stripeInstance;
+}
 
 /**
  * Create a Stripe Checkout Session for Pro plan subscription.
@@ -22,7 +42,7 @@ export async function createStripeCheckout(
   // Check if user already has a Stripe customer ID
   // If not, Stripe Checkout will create one automatically
 
-  const session = await stripe.checkout.sessions.create({
+  const session = await getStripe().checkout.sessions.create({
     mode: 'subscription',
     payment_method_types: ['card'],
     line_items: [
@@ -64,11 +84,15 @@ export function verifyStripeWebhook(
   rawBody: string,
   signature: string
 ): Stripe.Event {
-  return stripe.webhooks.constructEvent(
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    throw new Error(
+      'Stripe is not configured (missing STRIPE_WEBHOOK_SECRET). Set it to verify webhooks.'
+    );
+  }
+  return getStripe().webhooks.constructEvent(
     rawBody,
     signature,
-    process.env.STRIPE_WEBHOOK_SECRET!
+    webhookSecret
   );
 }
-
-export { stripe };

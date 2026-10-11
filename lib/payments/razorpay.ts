@@ -11,9 +11,24 @@ import crypto from 'crypto';
  * verify signature). The npm package adds unnecessary bundle size.
  */
 
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID!;
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET!;
 const RAZORPAY_BASE_URL = 'https://api.razorpay.com/v1';
+
+/**
+ * Read the Razorpay API keys at call time (never at import, so unconfigured
+ * deployments still build and boot). Throws clearly when keys are missing
+ * instead of failing later with a cryptic API 401.
+ */
+function requireKeys(): { keyId: string; keySecret: string } {
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+  if (!keyId || !keySecret) {
+    throw new Error(
+      'Razorpay is not configured (missing RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET). ' +
+        'Set them to enable checkout.'
+    );
+  }
+  return { keyId, keySecret };
+}
 
 /**
  * Create a Razorpay order for Pro plan subscription.
@@ -27,7 +42,8 @@ export async function createRazorpayOrder(
   amount: number;
   currency: string;
 }> {
-  const auth = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64');
+  const { keyId, keySecret } = requireKeys();
+  const auth = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
 
   const response = await fetch(`${RAZORPAY_BASE_URL}/orders`, {
     method: 'POST',
@@ -55,7 +71,7 @@ export async function createRazorpayOrder(
 
   return {
     order_id: order.id,
-    razorpay_key: RAZORPAY_KEY_ID,
+    razorpay_key: requireKeys().keyId,
     amount: 49900,
     currency: 'INR',
   };
@@ -71,8 +87,9 @@ export function verifyRazorpaySignature(
   paymentId: string,
   signature: string
 ): boolean {
+  const { keySecret } = requireKeys();
   const expectedSignature = crypto
-    .createHmac('sha256', RAZORPAY_KEY_SECRET)
+    .createHmac('sha256', keySecret)
     .update(`${orderId}|${paymentId}`)
     .digest('hex');
 
@@ -90,7 +107,12 @@ export function verifyRazorpayWebhook(
   rawBody: string,
   signature: string
 ): boolean {
-  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET!;
+  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    throw new Error(
+      'Razorpay is not configured (missing RAZORPAY_WEBHOOK_SECRET). Set it to verify webhooks.'
+    );
+  }
   const expectedSignature = crypto
     .createHmac('sha256', webhookSecret)
     .update(rawBody)
