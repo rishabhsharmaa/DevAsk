@@ -19,7 +19,7 @@ import { InlineError } from '@/components/state';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
-import { LLMProvider, Plan, Repo, SourceChunk, Message } from '@/types';
+import { LLMProvider, Repo, SourceChunk, Message } from '@/types';
 
 /** DB message mapped into the chat shape (assignable to the AI SDK UIMessage). */
 interface ChatMessageInit {
@@ -73,7 +73,6 @@ export default function RepoChatPage({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [files, setFiles] = useState<{ path: string }[]>([]);
   const [chunkTotal, setChunkTotal] = useState<number | null>(null);
-  const [plan, setPlan] = useState<Plan>('free');
   const [conversationId, setConversationId] = useState<string | null>(null);
 
   // Live indexing facts from the status API (never fabricated).
@@ -142,22 +141,14 @@ export default function RepoChatPage({
     }
   }
 
-  // Load User, Plan, and Repo metadata on mount
+  // Load User and Repo metadata on mount
   useEffect(() => {
     if (!authLoaded || !user) return;
     const userId = user.id;
 
     async function loadData() {
       try {
-        // 1. Load User Plan details
-        const { data: userRow } = await supabase
-          .from('users')
-          .select('plan')
-          .eq('id', userId)
-          .single();
-        if (userRow) setPlan(userRow.plan as Plan);
-
-        // 2. Load Repo Status
+        // Load Repo Status
         const { data: repoRow, error: repoError } = await supabase
           .from('repos')
           .select('*')
@@ -547,7 +538,6 @@ export default function RepoChatPage({
             setProvider={setProvider}
             apiKey={apiKey}
             setApiKey={setApiKey}
-            plan={plan}
             open={providerOpen}
             onOpenChange={setProviderOpen}
           />

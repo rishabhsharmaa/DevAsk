@@ -8,7 +8,7 @@ import type { EmbeddedBatch } from './embedder';
  * platform cost during indexing, not a per-query user cost.
  *
  * Uses raw REST instead of the `voyageai` npm package — one endpoint,
- * no extra dependency (same rationale as the Razorpay adapter).
+ * no extra dependency.
  *
  * Rate-limit pacing: one serialized queue with an AIMD delay shared by
  * every caller in this process (indexing batches AND chat queries — they

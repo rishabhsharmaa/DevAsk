@@ -1,20 +1,19 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Check, ChevronDown, Eye, EyeOff, KeyRound, Lock } from 'lucide-react';
+import { Check, ChevronDown, Eye, EyeOff, KeyRound } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { LLMProvider, Plan, DEFAULT_MODELS } from '@/types';
+import { LLMProvider, DEFAULT_MODELS } from '@/types';
 
 interface ProviderSelectorProps {
   provider: LLMProvider;
   setProvider: (provider: LLMProvider) => void;
   apiKey: string;
   setApiKey: (key: string) => void;
-  plan: Plan;
   /** Controlled dialog state so the chat input can request it. */
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -38,13 +37,11 @@ export function ProviderSelector({
   setProvider,
   apiKey,
   setApiKey,
-  plan,
   open,
   onOpenChange,
 }: ProviderSelectorProps) {
   const [showKey, setShowKey] = useState(false);
   const [draftKey, setDraftKey] = useState(apiKey);
-  const isFree = plan === 'free';
 
   const activeLabel = PROVIDERS.find((p) => p.value === provider)?.label ?? provider;
   const activeModel = MODEL_DISPLAY_NAMES[provider];
@@ -93,7 +90,6 @@ export function ProviderSelector({
               <p className="text-sm leading-none font-medium">Model</p>
               <div role="radiogroup" aria-label="Answer model" className="space-y-1.5">
                 {PROVIDERS.map((p) => {
-                  const locked = isFree && p.value !== 'openai';
                   const active = provider === p.value;
                   return (
                     <button
@@ -101,14 +97,12 @@ export function ProviderSelector({
                       type="button"
                       role="radio"
                       aria-checked={active}
-                      disabled={locked}
                       onClick={() => setProvider(p.value)}
                       className={cn(
                         'flex w-full items-center gap-3 border px-3 py-2.5 text-left transition-colors',
                         active
                           ? 'border-signal/50 bg-card'
-                          : 'border-border bg-card/40 hover:border-muted-foreground/40 hover:bg-card',
-                        locked && 'cursor-not-allowed opacity-60 hover:border-border hover:bg-card/40'
+                          : 'border-border bg-card/40 hover:border-muted-foreground/40 hover:bg-card'
                       )}
                     >
                       <span
@@ -128,20 +122,10 @@ export function ProviderSelector({
                           {p.label} · {DEFAULT_MODELS[p.value]}
                         </span>
                       </span>
-                      {locked && (
-                        <span className="inline-flex flex-shrink-0 items-center gap-1 border border-border bg-card px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                          <Lock className="h-2.5 w-2.5" /> Pro
-                        </span>
-                      )}
                     </button>
                   );
                 })}
               </div>
-              {isFree && (
-                <p className="text-[13px] text-muted-foreground">
-                  Free plan includes OpenAI. Anthropic and Gemini unlock with Pro.
-                </p>
-              )}
             </div>
 
             <div className="space-y-2">

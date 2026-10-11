@@ -4,14 +4,12 @@
 // ============================================
 
 // --- Enums as union types (simpler than TS enums for serialization) ---
-
-export type Plan = 'free' | 'pro';
+// (Plans were removed with the payment system — everything is free with
+// no limits. The users table still carries unused subscription columns.)
 
 export type IndexStatus = 'pending' | 'indexing' | 'ready' | 'failed';
 
 export type LLMProvider = 'anthropic' | 'openai' | 'gemini';
-
-export type PaymentProvider = 'stripe' | 'razorpay';
 
 export type MessageRole = 'user' | 'assistant';
 
@@ -23,12 +21,6 @@ export type EmbeddingProvider = 'gemini' | 'voyage';
 export interface User {
   id: string;                       // Clerk user ID
   github_token: string | null;
-  plan: Plan;
-  payment_provider: PaymentProvider | null;
-  stripe_customer_id: string | null;
-  stripe_subscription_id: string | null;
-  razorpay_customer_id: string | null;
-  plan_expires_at: string | null;   // ISO 8601 timestamptz
   created_at: string;
 }
 
@@ -125,21 +117,6 @@ export interface ChatResponse {
   source_chunks: SourceChunk[];
 }
 
-export interface CheckoutRequest {
-  plan: 'pro';
-}
-
-export interface CheckoutResponse {
-  provider: PaymentProvider;
-  // Stripe: redirect URL
-  checkout_url?: string;
-  // Razorpay: order details for popup
-  order_id?: string;
-  razorpay_key?: string;
-  amount?: number;
-  currency?: string;
-}
-
 // --- LLM provider config ---
 
 export interface LLMConfig {
@@ -155,30 +132,3 @@ export const DEFAULT_MODELS: Record<LLMProvider, string> = {
   gemini: 'gemini-3.8-flash',
 } as const;
 
-// --- Plan feature gates ---
-
-export const PLAN_LIMITS: Record<Plan, {
-  max_repos: number;
-  private_repos: boolean;
-  providers: LLMProvider[];
-  persistent_history: boolean;
-  shareable_links: boolean;
-  export_chat: boolean;
-}> = {
-  free: {
-    max_repos: 2,
-    private_repos: false,
-    providers: ['openai'],           // Free tier: single provider only
-    persistent_history: false,
-    shareable_links: false,
-    export_chat: false,
-  },
-  pro: {
-    max_repos: Infinity,
-    private_repos: true,
-    providers: ['anthropic', 'openai', 'gemini'],
-    persistent_history: true,
-    shareable_links: true,
-    export_chat: true,
-  },
-} as const;

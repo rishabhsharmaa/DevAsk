@@ -8,7 +8,6 @@ import {
   getActiveDimension,
   getActiveModelName,
 } from '@/lib/rag/embedder';
-import { PLAN_LIMITS } from '@/types';
 
 // Fire-and-forget background indexing pipeline
 async function indexRepoBackground(
@@ -159,48 +158,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Retrieve user token & subscription plan
+    // Retrieve the user token (creating the user row on first use — repos
+    // reference it as a foreign key). No repo limits: everything is free.
     const { data: userRow, error: userError } = await supabaseAdmin
       .from('users')
       .select('*')
       .eq('id', userId)
       .single();
 
-    let userPlan = 'free';
     let gitHubToken: string | null = null;
 
     if (userError || !userRow) {
       // Create user row if not exists
       const { error: createError } = await supabaseAdmin
         .from('users')
-        .insert({ id: userId, plan: 'free' })
+        .insert({ id: userId })
         .select()
         .single();
-      
+
       if (createError) {
         return NextResponse.json({ error: 'Failed to create user record.' }, { status: 500 });
       }
     } else {
-      userPlan = userRow.plan || 'free';
       gitHubToken = userRow.github_token || null;
-    }
-
-    // Check repository limits
-    const { data: existingRepos, error: reposError } = await supabaseAdmin
-      .from('repos')
-      .select('id')
-      .eq('user_id', userId);
-
-    if (reposError) {
-      return NextResponse.json({ error: 'Failed to check repository count.' }, { status: 500 });
-    }
-
-    const limits = PLAN_LIMITS[userPlan as keyof typeof PLAN_LIMITS];
-    if (existingRepos.length >= limits.max_repos) {
-      return NextResponse.json(
-        { error: `You have reached the maximum of ${limits.max_repos} repositories for your ${userPlan} plan. Please upgrade to Pro.` },
-        { status: 403 }
-      );
     }
 
     // Insert new repo in pending state

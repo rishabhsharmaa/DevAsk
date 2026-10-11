@@ -2,12 +2,10 @@ import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
 import {
   ArrowRight,
-  ArrowUpRight,
   Check,
   FileCode2,
   FolderOpen,
   KeyRound,
-  Lock,
   MessageSquareText,
   Search,
 } from "lucide-react";
@@ -40,9 +38,6 @@ export default async function LandingPage() {
             </Link>
             <Link href="#models" className="transition-colors hover:text-foreground">
               Models
-            </Link>
-            <Link href="#pricing" className="transition-colors hover:text-foreground">
-              Pricing
             </Link>
           </nav>
           <div className="flex items-center gap-2">
@@ -207,7 +202,7 @@ export default async function LandingPage() {
                   n: "01",
                   title: "Connect",
                   detail: "github.com/owner/repo",
-                  body: "Paste any public repository URL. Private repos connect through GitHub OAuth on Pro — DevAsk only ever reads through the API.",
+                  body: "Paste any public repository URL — private repos work too when the server GitHub token can read them. DevAsk only ever reads through the API.",
                 },
                 {
                   n: "02",
@@ -387,100 +382,19 @@ export default async function LandingPage() {
           <div className="self-start border border-border bg-background">
             {(
               [
-                ["OpenAI", "GPT-4o", "Free + Pro", false],
-                ["Anthropic", "Claude Sonnet", "Pro", true],
-                ["Google", "Gemini 3.8 Flash", "Pro", true],
-              ] as [string, string, string, boolean][]
-            ).map(([provider, model, plan, pro], i) => (
+                ["OpenAI", "GPT-4o"],
+                ["Anthropic", "Claude Sonnet 4"],
+                ["Google", "Gemini 3.8 Flash"],
+              ] as [string, string][]
+            ).map(([provider, model], i) => (
               <div
                 key={provider}
-                className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-4 py-3.5 sm:grid-cols-[140px_minmax(0,1fr)_auto] sm:gap-4 ${i > 0 ? "border-t border-border" : ""}`}
+                className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-4 py-3.5 sm:grid-cols-[140px_minmax(0,1fr)] sm:gap-4 ${i > 0 ? "border-t border-border" : ""}`}
               >
                 <p className="text-sm font-semibold">{provider}</p>
-                <p className="font-mono text-xs text-muted-foreground max-sm:col-start-1">{model}</p>
-                <p className="flex items-center gap-1.5 font-mono text-[11.5px] text-muted-foreground max-sm:col-start-2 max-sm:row-start-1">
-                  {Boolean(pro) && <Lock className="h-3 w-3" />}
-                  {plan}
-                </p>
+                <p className="font-mono text-xs text-muted-foreground sm:text-right">{model}</p>
               </div>
             ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ===== Pricing ===== */}
-      <section id="pricing" className="scroll-mt-16 border-b border-border">
-        <div className="mx-auto w-full max-w-6xl px-4 py-14 sm:px-6 lg:py-[4.5rem]">
-          <div className="grid gap-8 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
-            <div>
-              <h2 className="text-2xl font-semibold tracking-tight sm:text-[1.7rem]">
-                Start free. Go Pro when the work gets serious.
-              </h2>
-              <p className="mt-3 text-[15px] leading-relaxed text-muted-foreground">
-                Two plans, no tiers-within-tiers. The difference is scope:
-                how many repos, which providers, and whether history persists.
-              </p>
-            </div>
-            <div className="grid gap-px border border-border bg-border sm:grid-cols-2">
-              <div className="flex flex-col bg-background p-6">
-                <h3 className="text-[15px] font-semibold">Free</h3>
-                <p className="mt-0.5 text-[13px] text-muted-foreground">For trying it on side projects</p>
-                <p className="mt-4 text-3xl font-semibold tracking-tight tabular">
-                  $0
-                  <span className="text-sm font-normal text-muted-foreground"> /mo</span>
-                </p>
-                <ul className="mt-5 flex-1 space-y-2.5 text-[13.5px]">
-                  {["2 public repositories", "OpenAI provider", "Repo-scoped chat", "Session history"].map((f) => (
-                    <li key={f} className="flex items-start gap-2">
-                      <Check className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                      {f}
-                    </li>
-                  ))}
-                </ul>
-                <Link
-                  href={primaryHref}
-                  className="mt-6 inline-flex h-9 items-center justify-center border border-border bg-card text-sm font-medium transition-colors hover:bg-accent"
-                >
-                  Get started
-                </Link>
-              </div>
-              <div className="flex flex-col bg-background p-6">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-[15px] font-semibold">Pro</h3>
-                  <span className="bg-signal px-1.5 py-0.5 font-mono text-[10.5px] font-semibold tracking-wide text-signal-foreground uppercase">
-                    Full workspace
-                  </span>
-                </div>
-                <p className="mt-0.5 text-[13px] text-muted-foreground">For daily work on real codebases</p>
-                <p className="mt-4 text-3xl font-semibold tracking-tight tabular">
-                  $9
-                  <span className="text-sm font-normal text-muted-foreground"> /mo</span>
-                </p>
-                <p className="mt-1 font-mono text-[11.5px] text-muted-foreground">₹499/mo in India</p>
-                <ul className="mt-5 flex-1 space-y-2.5 text-[13.5px]">
-                  {[
-                    "Unlimited repositories",
-                    "Private repo access",
-                    "OpenAI + Anthropic + Gemini",
-                    "Persistent chat history",
-                    "Shareable links + export",
-                    "Large repo support",
-                  ].map((f) => (
-                    <li key={f} className="flex items-start gap-2">
-                      <Check className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-signal" />
-                      {f}
-                    </li>
-                  ))}
-                </ul>
-                <Link
-                  href={primaryHref}
-                  className="mt-6 inline-flex h-9 items-center justify-center gap-1.5 bg-primary text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/85"
-                >
-                  {userId ? "Upgrade in dashboard" : "Start Pro"}
-                  <ArrowUpRight className="h-3.5 w-3.5" />
-                </Link>
-              </div>
-            </div>
           </div>
         </div>
       </section>
@@ -517,9 +431,6 @@ export default async function LandingPage() {
           <nav className="flex gap-5 text-[13px] text-muted-foreground" aria-label="Footer">
             <Link href="#product" className="transition-colors hover:text-foreground">
               Product
-            </Link>
-            <Link href="#pricing" className="transition-colors hover:text-foreground">
-              Pricing
             </Link>
             <Link href={userId ? "/dashboard" : "/sign-in"} className="transition-colors hover:text-foreground">
               {userId ? "Dashboard" : "Sign in"}

@@ -28,7 +28,6 @@ No IDE. No setup. Just a URL — with source-file citations on every answer.
   - [Repository indexing flow](#1-repository-indexing-flow)
   - [Chat / RAG flow](#2-chat--rag-flow)
   - [Authentication flow](#3-authentication-flow)
-  - [Payments flow](#4-payments-flow)
 - [Tech stack](#-tech-stack)
 - [Project structure](#-project-structure)
 - [Database](#-database)
@@ -65,7 +64,7 @@ Pasting a repo URL into a general LLM gets you a README summary and guesses. Dev
 - **BYOK (Bring Your Own Key)** — OpenAI / Anthropic / Google keys are used once per request, never stored.
 - **Multi-provider LLM** — GPT-4o, Claude Sonnet, Gemini Flash behind one streaming interface.
 - **Private repos** — server-side GitHub token support (5,000 req/hr vs 60 anonymous).
-- **Plans & payments** — Free vs Pro with automatic Stripe (global, $9/mo) / Razorpay (India, ₹499/mo) routing by IP geolocation.
+- **Free for everything** — unlimited repos, all LLM providers, persistent history. No plans, no checkout.
 - **Dark developer UI** — Tailwind v4 + shadcn, Geist fonts, violet glow aesthetic.
 
 ## 🏗️ Architecture
@@ -79,8 +78,6 @@ flowchart TB
     Next -->|"Octokit + GITHUB_TOKEN"| GH["GitHub API\n(tree + contents)"]
     Next -->|"REST (platform key)"| GemEmbed["Gemini embeddings\ngemini-embedding-2 (768d)"]
     Next -->|"user BYOK per request"| LLM["LLM providers\nOpenAI · Anthropic · Gemini"]
-    Next -->|"ipapi.co country detect"| Pay["Stripe (global)\nRazorpay (India)"]
-    Pay -->|"webhooks"| Next
 ```
 
 **Component responsibilities:**
@@ -93,10 +90,9 @@ flowchart TB
 | GitHub ingest | `lib/github/client.ts` | Tree crawl + content fetch, exclusion filters, token handling |
 | RAG | `lib/rag/` | `chunker` (split) → `embedder` (Gemini default, Voyage opt-in) → `retriever` (pgvector search + prompt build) |
 | LLM router | `lib/llm/` | One `streamChat()` over OpenAI / Anthropic / Gemini adapters (BYOK) |
-| Payments | `lib/payments/` | Geo-routing + Stripe/Razorpay adapters + webhook verification |
 | Database | `lib/supabase/` | Browser client (RLS-bound), service client (server-only), schema + migrations |
 | UI | `components/` | Chat, file explorer, provider selector, repo cards, shadcn primitives |
-| Contract | `types/index.ts` | Single source of truth: entities, API shapes, plan limits, default models |
+| Contract | `types/index.ts` | Single source of truth: entities, API shapes, default models |
 
 ## 🔄 How it works
 
@@ -113,7 +109,7 @@ sequenceDiagram
 
     D->>UI: Paste repo URL, click 'Index'
     UI->>API: { url }
-    API->>DB: auth check, ensure user row, enforce plan repo limit
+    API->>DB: auth check, ensure user row (no repo limits)
     API->>DB: insert repos row (status: pending)
     API-->>UI: { repo_id, status: pending } (returns immediately)
     Note over API: background pipeline (fire-and-forget)
@@ -142,7 +138,7 @@ sequenceDiagram
 
     D->>UI: Type question (+ BYOK key, provider)
     UI->>API: { messages[], repo_id, provider, api_key, conversation_id }
-    API->>DB: verify plan allows provider + repo ownership
+    API->>DB: verify repo ownership (all providers allowed)
     API->>DB: create conversation if conversation_id is null
     API->>GE: embed question (same Gemini model)
     API->>DB: match_chunks RPC (cosine similarity, top 10, threshold 0.3)
@@ -178,23 +174,6 @@ flowchart LR
 - The browser Supabase client attaches the Clerk session JWT to every request; Supabase validates it via the Clerk JWKS configured under **Authentication → Third-Party Auth**, and RLS policies isolate each user's rows.
 - Webhook routes are explicitly public and authenticate via provider signatures instead.
 
-### 4. Payments flow
-
-```mermaid
-flowchart TD
-    U["Upgrade click"] --> C["POST /api/payments/checkout"]
-    C --> IP{"ipapi.co country?"}
-    IP -->|"IN"| R["Create Razorpay order ₹499"]
-    IP -->|"other/localhost"| S["Create Stripe session $9"]
-    R --> RP["Razorpay popup"] --> V["POST /verify\nHMAC check"] --> Pro1[("plan=pro, +32d")]
-    RP -->|"payment.captured"| WH1["Razorpay webhook\nHMAC check"] --> Pro1
-    S --> SU["Stripe hosted page"] -->|"checkout.session.completed"| WH2["Stripe webhook\nsignature check"] --> Pro2[("plan=pro, +32d")]
-    WH2 -->|"invoice.paid"| Renew["Extend +32d"]
-    WH2 -->|"subscription.deleted"| Downgrade[("plan=free")]
-```
-
-Routing is fully automatic — the user never picks a provider.
-
 ## 🧰 Tech stack
 
 | Concern | Choice | Notes |
@@ -207,7 +186,6 @@ Routing is fully automatic — the user never picks a provider.
 | Chat LLM | Vercel AI SDK (`ai` + `@ai-sdk/*`) | BYOK: GPT-4o, Claude Sonnet 4.6, Gemini 3.8 Flash |
 | GitHub | Octokit | Token-authenticated crawl, 401/403/429 abort loudly |
 | State (client) | TanStack Query | Dashboard server-state; chat via `useChat` |
-| Payments | Stripe + Razorpay, ipapi.co geo-detect | Webhooks update plan + 32-day expiry |
 | Markdown/code | react-markdown + remark-gfm, shiki | `shiki` externalized via `serverExternalPackages` |
 
 ## 📁 Project structure
@@ -219,22 +197,16 @@ DevAsk/
 │   ├── layout.tsx                # Root: ClerkProvider, Geist fonts, dark mode
 │   ├── globals.css               # Tailwind v4 theme, custom tokens & chat prose
 │   ├── (auth)/sign-in|sign-up/   # Clerk prebuilt components (catch-all routes)
-│   ├── dashboard/                # Authed repo grid: list/add/reindex/delete/upgrade
+│   ├── dashboard/                # Authed repo grid: list/add/reindex/delete
 │   ├── repo/[id]/                # Authed chat: layout guards ownership, page hosts chat
 │   └── api/
 │       ├── chat/route.ts         # RAG chat (validate → retrieve → stream → persist)
 │       ├── repo/index/route.ts   # Start indexing (returns pending, pipelines async)
-│       ├── repo/status/route.ts  # Poll index status + counts (client polls 3s)
-│       └── payments/
-│           ├── checkout/route.ts # Geo-routed checkout creation
-│           ├── stripe/webhook/   # completed/paid/deleted → plan lifecycle
-│           └── razorpay/
-│               ├── verify/route.ts   # Immediate HMAC verify → instant Pro
-│               └── webhook/route.ts  # payment.captured → Pro (backup path)
+│       └── repo/status/route.ts  # Poll index status + counts (client polls 3s)
 ├── components/
 │   ├── chat/                     # chat-input, message-list, message-bubble, citations
 │   ├── file-explorer/            # Flat paths → nested tree + search
-│   ├── provider-selector/        # LLM picker (Pro-gated) + BYOK key input
+│   ├── provider-selector/        # LLM picker + BYOK key input
 │   ├── repo-card/                # Status badge, metadata, reindex/delete/chat actions
 │   ├── providers.tsx             # TanStack Query provider (dashboard/repo only)
 │   └── ui/                       # shadcn primitives
@@ -250,7 +222,6 @@ DevAsk/
 │   │   ├── index.ts              # streamChat router + provider display names
 │   │   ├── extract-user-text.ts  # Latest user text from transport messages[]
 │   │   └── providers/            # openai.ts, anthropic.ts, gemini.ts (BYOK adapters)
-│   ├── payments/                 # index.ts (geo-route), stripe.ts, razorpay.ts
 │   ├── supabase/
 │   │   ├── client.ts             # Browser singleton (RLS-bound, Clerk JWT injected)
 │   │   ├── service.ts            # Service-role client (SERVER ONLY, bypasses RLS)
@@ -274,7 +245,7 @@ Defined in [`lib/supabase/schema.sql`](lib/supabase/schema.sql) — run it once 
 
 | Table | Purpose | Key columns |
 |---|---|---|
-| `users` | Clerk-linked profile + subscription | `id` (Clerk ID), `plan`, `payment_provider`, Stripe/Razorpay IDs, `plan_expires_at` |
+| `users` | Clerk-linked profile | `id` (Clerk ID), `github_token` (legacy subscription columns unused) |
 | `repos` | Indexed repositories | `id` (uuid), `user_id`, `url/owner/name`, `index_status` (`pending\|indexing\|ready\|failed`), `metadata` (jsonb) |
 | `chunks` | RAG vector store | `repo_id` (cascade delete), `file_path`, `content`, `embedding vector(768)` |
 | `conversations` | Chat sessions | `repo_id`, `user_id`, `is_public` (shareable links) |
@@ -291,7 +262,7 @@ Defined in [`lib/supabase/schema.sql`](lib/supabase/schema.sql) — run it once 
 ### Prerequisites
 
 - **Node.js 20.9+** (v20.19+ verified; v22+ silences a transitive engine warning)
-- Accounts/keys: **Clerk**, **Supabase**, **Google AI Studio** (free tier, no card — covers embeddings and Gemini chat), **GitHub** (PAT), optionally **Stripe**/**Razorpay**
+- Accounts/keys: **Clerk**, **Supabase**, **Google AI Studio** (free tier, no card — covers embeddings and Gemini chat), **GitHub** (PAT)
 
 ### 1. Install
 
@@ -307,7 +278,7 @@ cp .env.example .env.local   # then fill in the values below (once only!)
 
 ### 2. Environment variables
 
-All 17 live in [`.env.example`](.env.example) with comments:
+All 11 live in [`.env.example`](.env.example) with comments:
 
 | Variable | Where to get it | Used for |
 |---|---|---|
@@ -322,11 +293,6 @@ All 17 live in [`.env.example`](.env.example) with comments:
 | `GEMINI_EMBEDDING_MODEL` | — | Optional override (default `gemini-embedding-2`); must accept 768-dim output |
 | `VOYAGE_API_KEY` | [Voyage dashboard](https://dashboard.voyageai.com) → API keys | Only when `EMBEDDING_PROVIDER=voyage`; never called in gemini mode |
 | `GITHUB_TOKEN` | GitHub → Settings → Personal access tokens (no scopes needed for public repos) | Indexing at 5,000 req/hr |
-| `STRIPE_SECRET_KEY` | Stripe dashboard | Non-India checkout |
-| `STRIPE_WEBHOOK_SECRET` | Stripe → Webhooks | Webhook verification |
-| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | Razorpay dashboard | India orders + signature verify |
-| `RAZORPAY_WEBHOOK_SECRET` | Razorpay → Webhooks | Webhook verification |
-| `NEXT_PUBLIC_APP_URL` | — | Stripe success/cancel redirects (`http://localhost:3000` locally) |
 
 ### 3. Supabase setup (3 steps — all required)
 
@@ -346,7 +312,7 @@ All 17 live in [`.env.example`](.env.example) with comments:
 npm run dev      # → http://localhost:3000
 ```
 
-Sign up, paste a repo URL on the dashboard, wait for indexing, then chat. For payments testing, point Stripe/Razorpay webhooks at your dev tunnel (`/api/payments/stripe/webhook`, `/api/payments/razorpay/webhook`).
+Sign up, paste a repo URL on the dashboard, wait for indexing, then chat.
 
 ## 📖 Usage
 
@@ -358,17 +324,9 @@ Sign up, paste a repo URL on the dashboard, wait for indexing, then chat. For pa
 | View sources | Click any `[n] filename` citation chip under an answer |
 | Browse files | Left explorer → search / click any file for full contents |
 | Starter prompts | Empty chat shows 4 suggested architecture questions |
-| Upgrade to Pro | Dashboard banner → automatic Stripe/Razorpay checkout |
 | Re-index | Delete the repo card first, then re-add (avoids duplicate rows) |
 
-**Plans** (enforced server-side in [`types/index.ts`](types/index.ts) → `PLAN_LIMITS`):
-
-| | Free | Pro ($9 / ₹499 per mo) |
-|---|---|---|
-| Repos | 2, public only | Unlimited incl. private |
-| LLM providers | OpenAI only | OpenAI + Anthropic + Gemini |
-| History | Session-only | Persistent |
-| Sharing / export | — | Shareable links + export |
+Everything is free with no limits: unlimited repositories, all LLM providers, persistent history.
 
 ## 🔌 API reference
 
@@ -379,16 +337,12 @@ All routes except webhooks require a Clerk session (browsers are redirected to s
 | `POST /api/repo/index` | user | `{ url: "https://github.com/o/n" }` | `{ repo_id, status: "pending" }` |
 | `GET /api/repo/status?repo_id=` | owner | query param | `{ index_status, file_count, chunk_count, metadata }` |
 | `POST /api/chat` | owner | `{ messages[] }` (transport) **or** `{ message }` (direct), `repo_id`, `provider`, `api_key`, `conversation_id?` | UI-message stream + `x-conversation-id` header |
-| `POST /api/payments/checkout` | user | `{}` (plan fixed to `pro`) | `{ provider, checkout_url }` **or** `{ provider, order_id, razorpay_key, amount, currency }` |
-| `POST /api/payments/razorpay/verify` | user | `{ razorpay_order_id, razorpay_payment_id, razorpay_signature }` | `{ success: true }` |
-| `POST /api/payments/stripe/webhook` | Stripe sig | Stripe event | `{ received: true }` |
-| `POST /api/payments/razorpay/webhook` | Razorpay sig | Razorpay event | `{ received: true }` |
 
 **Chat request notes:**
 
 - `provider`: `anthropic` | `openai` | `gemini`; `api_key` is BYOK (never persisted); `message`/`messages` carry the question (see [transport note](#-key-implementation-notes)).
-- `400 { error }` names exactly which required fields are missing.
-- `403` when the provider isn't in your plan; `404` for repos you don't own.
+- `400 { error }` names exactly which required fields are missing, and rejects unknown providers.
+- `404` for repos you don't own.
 - The stream is `toUIMessageStreamResponse()`; the assistant reply is persisted with `source_chunks` when streaming completes.
 
 ---
@@ -408,7 +362,6 @@ All knobs are constants near the top of their files — no config service:
 | GitHub fetch concurrency | `lib/github/client.ts` | 5 parallel | Higher = faster indexing, more rate-limit pressure |
 | Excluded paths | `lib/github/client.ts` | `node_modules`, `.git`, `dist`, `build`, binaries, lockfiles… | Extend to skip generated code |
 | Max file size | `lib/github/client.ts` | 1 MB | Larger files are skipped silently |
-| Plan limits | `types/index.ts` (`PLAN_LIMITS`) | Free: 2 repos, OpenAI only | Single source of truth, enforced in API routes |
 | Default models | `types/index.ts` (`DEFAULT_MODELS`) | `gpt-4o`, `claude-sonnet-4-6`, `gemini-3.8-flash` | Overridable per request via `model` |
 
 **Embedding model choice:** Google `gemini-embedding-2` (768 dims, truncated from native 3072) via the AI Studio REST API — needs the platform `GEMINI_EMBEDDING_API_KEY` (free tier, same key as Gemini chat). Batching + 4s pacing keep usage inside the free tier (100 RPM / 30K TPM / 1K RPD). Run `npm run benchmark:embeddings` for a live smoke test (5 chunks, dimension + sanity assertions).
@@ -433,8 +386,7 @@ Read this before changing code — these are the non-obvious decisions and traps
 6. **Conversation continuity** relies on the `x-conversation-id` response header: the client sends `conversation_id: null` once, the server creates the conversation and returns its ID in the header, and subsequent sends reuse it.
 7. **Reindex duplicates.** The dashboard "re-index" button inserts a *new* repo row rather than refreshing in place — delete first, then re-add.
 8. **`users.github_token` is never synced.** The column exists for per-user GitHub OAuth, but no code writes it; indexing authenticates via the server-side `GITHUB_TOKEN` env var. Per-user private-repo OAuth is the planned production follow-up.
-9. **Payments are geo-routed, never user-chosen.** `ipapi.co` maps the client IP to a country (localhost → Stripe); keep it that way.
-10. **Embeddings are provider-dispatched, Gemini by default.** `lib/rag/embedder.ts` routes to `./gemini` (API) or `./voyage` (API) per `EMBEDDING_PROVIDER`. Never add a silent cross-provider fallback — different providers mean different vector spaces. The 768/1024 dimension must always match the DB column; the model stamps every index so chat can refuse mismatches (409).
+9. **Embeddings are provider-dispatched, Gemini by default.** `lib/rag/embedder.ts` routes to `./gemini` (API) or `./voyage` (API) per `EMBEDDING_PROVIDER`. Never add a silent cross-provider fallback — different providers mean different vector spaces. The 768/1024 dimension must always match the DB column; the model stamps every index so chat can refuse mismatches (409).
 
 ## 🩺 Troubleshooting
 
@@ -447,7 +399,7 @@ Read this before changing code — these are the non-obvious decisions and traps
 | Repo page stuck on "Loading repository" | Supabase doesn't trust Clerk JWTs → RLS denies all browser reads | Supabase → Authentication → Third-Party Auth → enable Clerk + set domain |
 | Dashboard shows no repos (but indexing works) | Same RLS cause as above | Same fix; a banner now surfaces query errors |
 | Chat 400 `Missing required fields: …` | A field didn't reach the server (empty key, regressed transport, …) | The error names the field; check key input and the transport note above |
-| Chat sends but nothing streams, no provider usage | Request rejected before the LLM (see banner) | Read the banner error text; check provider key and plan limits |
+| Chat sends but nothing streams, no provider usage | Request rejected before the LLM (see banner) | Read the banner error text; check provider key |
 | `Multiple GoTrueClient instances` warning | More than one browser Supabase client constructed | Should not happen (singleton); report if you see it |
 | `npm ci` fails (lockfile out of sync) | Committed lockfile drifted from `package.json` | Use `npm install` to re-sync |
 | Slow indexing (large repos) | Gemini free tier pacing: 4s between requests | Expected on free tier; ~15 chunks/min on big repos |
@@ -473,7 +425,7 @@ Conventions: `tsc` must be clean; keep every file you touch at **zero ESLint err
 - [ ] **Durable indexing pipeline** — move off fire-and-forget to a queue (Inngest/Trigger.dev/pg-boss) with resume + real progress.
 - [ ] **Reindex in place** — update the existing row instead of inserting a duplicate.
 - [ ] **CI** — `node:test` suite exists (`tests/embedder.test.ts`, via `npm test`); GitHub Actions wiring still wanted.
-- [ ] **Share/export UI** — `is_public` and plan flags exist, but no share-link or export UI is built.
+- [ ] **Share/export UI** — `is_public` exists, but no share-link or export UI is built.
 - [ ] **Auto summaries** — `metadata.summary`/`architecture` fields exist but nothing generates them yet.
 
 ---

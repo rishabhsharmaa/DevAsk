@@ -4,7 +4,7 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
  * Next.js 16 proxy file (replaces deprecated middleware.ts).
  * 
  * Uses Clerk's middleware to protect authenticated routes.
- * Public routes (landing page, auth pages, webhooks) are explicitly excluded.
+ * Public routes (landing page, auth pages) are explicitly excluded.
  * 
  * In Next.js 16, the "middleware" file convention is renamed to "proxy".
  * The Clerk clerkMiddleware function is compatible — we just re-export it
@@ -17,18 +17,14 @@ const isProtectedRoute = createRouteMatcher([
   '/repo(.*)',
   '/api/repo(.*)',
   '/api/chat(.*)',
-  '/api/payments/checkout(.*)',
-  '/api/payments/razorpay/verify(.*)',
 ]);
 
-// Routes that must NOT be protected (webhooks, public pages)
+// Routes that must NOT be protected (public pages)
 const isPublicRoute = createRouteMatcher([
   '/',
   '/sign-in(.*)',
   '/sign-up(.*)',
   '/shared(.*)',
-  '/api/payments/stripe/webhook(.*)',
-  '/api/payments/razorpay/webhook(.*)',
 ]);
 
 export default clerkMiddleware(async (auth, req) => {

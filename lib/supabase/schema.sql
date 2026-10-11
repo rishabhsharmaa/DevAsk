@@ -8,11 +8,13 @@ create extension if not exists vector;
 
 -- ============================================
 -- Users table — synced with Clerk user IDs
+-- (plan/payment columns below are unused since payments were removed;
+-- kept so existing databases keep working without a migration.)
 -- ============================================
 create table users (
   id text primary key,                        -- Clerk user ID
   github_token text,                          -- OAuth token for private repo access
-  plan text not null default 'free',          -- 'free' | 'pro'
+  plan text not null default 'free',          -- unused (was 'free' | 'pro')
   payment_provider text,                      -- 'stripe' | 'razorpay'
   stripe_customer_id text,
   stripe_subscription_id text,

@@ -8,13 +8,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus,
   Github,
-  ArrowUpRight,
-  ArrowRight,
   FolderGit2,
   RefreshCw,
   Trash2,
   MessageSquareText,
-  CheckCircle2,
 } from 'lucide-react';
 import { supabase, setBrowserTokenGetter } from '@/lib/supabase/client';
 import { StatusBadge } from '@/components/status';
@@ -24,36 +21,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import type { Repo, Plan, CheckoutResponse } from '@/types';
-import { PLAN_LIMITS } from '@/types';
-
-// Razorpay popup checkout (loaded via script tag at runtime)
-interface RazorpayCheckoutResponse {
-  razorpay_order_id: string;
-  razorpay_payment_id: string;
-  razorpay_signature: string;
-}
-
-interface RazorpayCheckoutOptions {
-  key?: string;
-  amount?: number;
-  currency?: string;
-  name: string;
-  description: string;
-  order_id?: string;
-  handler: (response: RazorpayCheckoutResponse) => void;
-  theme: { color: string };
-}
-
-interface RazorpayInstance {
-  open(): void;
-}
-
-declare global {
-  interface Window {
-    Razorpay: new (options: RazorpayCheckoutOptions) => RazorpayInstance;
-  }
-}
+import type { Repo } from '@/types';
 
 const GITHUB_URL_RE =
   /^https?:\/\/(www\.)?github\.com\/([^/\s]+)\/([^/\s#?]+)(\/)?(\?.*)?$/;
@@ -92,27 +60,6 @@ export default function DashboardPage() {
 
   // Inline (non-blocking) notices — no alert()/confirm() anywhere.
   const [actionError, setActionError] = useState<string | null>(null);
-  const [upgradeNotice, setUpgradeNotice] = useState<{ kind: 'error' | 'success'; text: string } | null>(null);
-
-  // Payment upgrade state
-  const [isUpgrading, setIsUpgrading] = useState(false);
-
-  // Load User details and subscription plan
-  const { data: userRow, refetch: refetchUser } = useQuery({
-    queryKey: ['user-plan', user?.id],
-    queryFn: async () => {
-      if (!user?.id) return null;
-      const { data } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-      return data;
-    },
-    enabled: !!user?.id,
-  });
-
-  const plan = (userRow?.plan || 'free') as Plan;
 
   // React Query: Fetch indexed repositories
   const { data: repos, isLoading: isReposLoading, error: reposError, refetch: refetchRepos } = useQuery<Repo[]>({
@@ -130,8 +77,6 @@ export default function DashboardPage() {
   });
 
   const repoCount = repos?.length ?? 0;
-  const maxRepos = PLAN_LIMITS[plan].max_repos;
-  const atLimit = Number.isFinite(maxRepos) && repoCount >= maxRepos;
   const parsedPreview = parseGitHubUrl(repoUrl);
 
   // Mutator: Index a new repository
@@ -216,79 +161,6 @@ export default function DashboardPage() {
     }
   };
 
-  // Action: Open hosted Stripe page or load Razorpay script
-  const handleUpgrade = async () => {
-    setIsUpgrading(true);
-    setUpgradeNotice(null);
-    try {
-      const res = await fetch('/api/payments/checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      const data: CheckoutResponse = await res.json();
-
-      if (data.provider === 'stripe' && data.checkout_url) {
-        // Redirect to Stripe checkout page
-        window.location.href = data.checkout_url;
-      } else if (data.provider === 'razorpay') {
-        // Load razorpay script first
-        const loadScript = () => {
-          return new Promise((resolve) => {
-            const script = document.createElement('script');
-            script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-            script.onload = () => resolve(true);
-            script.onerror = () => resolve(false);
-            document.body.appendChild(script);
-          });
-        };
-
-        const loaded = await loadScript();
-        if (!loaded) {
-          throw new Error('Failed to load Razorpay popup interface.');
-        }
-
-        const options = {
-          key: data.razorpay_key,
-          amount: data.amount,
-          currency: data.currency,
-          name: 'DevAsk Pro',
-          description: 'Unlimited codebase indexing subscription',
-          order_id: data.order_id,
-          handler: async function (response: RazorpayCheckoutResponse) {
-            // Call verify API
-            const verifyRes = await fetch('/api/payments/razorpay/verify', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                razorpay_order_id: response.razorpay_order_id,
-                razorpay_payment_id: response.razorpay_payment_id,
-                razorpay_signature: response.razorpay_signature,
-              }),
-            });
-
-            if (verifyRes.ok) {
-              refetchUser();
-              setUpgradeNotice({ kind: 'success', text: 'Upgraded to Pro. Unlimited repositories and private repos are now unlocked.' });
-            } else {
-              setUpgradeNotice({ kind: 'error', text: 'Payment signature verification failed. Please contact support.' });
-            }
-          },
-          theme: {
-            color: '#B98A2F',
-          },
-        };
-
-        const rzp = new window.Razorpay(options);
-        rzp.open();
-      }
-    } catch (err) {
-      setUpgradeNotice({ kind: 'error', text: `Checkout failed: ${err instanceof Error ? err.message : String(err)}` });
-    } finally {
-      setIsUpgrading(false);
-    }
-  };
-
   return (
     <div className="space-y-6">
       {/* Workspace header: what exists, what it costs, what to do next */}
@@ -301,34 +173,12 @@ export default function DashboardPage() {
             ) : (
               <>
                 {repoCount} {repoCount === 1 ? 'repository' : 'repositories'}
-                {' · '}
-                <span className="capitalize">{plan} plan</span>
-                {Number.isFinite(maxRepos) && (
-                  <>
-                    {' · '}
-                    <span className={cn(atLimit && 'text-signal')}>
-                      {repoCount}/{maxRepos} used
-                    </span>
-                  </>
-                )}
               </>
             )}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          {plan === 'free' && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleUpgrade}
-              disabled={isUpgrading}
-              className="gap-1.5"
-            >
-              <ArrowUpRight className="h-3.5 w-3.5" />
-              {isUpgrading ? 'Opening checkout…' : 'Upgrade to Pro'}
-            </Button>
-          )}
           <Button size="sm" onClick={() => setIsAddOpen(true)} className="gap-1.5 font-semibold">
             <Plus className="h-4 w-4" />
             Add repository
@@ -336,44 +186,8 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Upgrade / plan notices */}
-      {upgradeNotice?.kind === 'error' && (
-        <InlineError title="Upgrade didn't complete" body={upgradeNotice.text} />
-      )}
-      {upgradeNotice?.kind === 'success' && (
-        <div
-          role="status"
-          className="flex items-start gap-3 border border-success/25 bg-success/[7%] px-4 py-3"
-        >
-          <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-success" />
-          <p className="text-sm">{upgradeNotice.text}</p>
-        </div>
-      )}
       {actionError && (
         <InlineError title="Something went wrong" body={actionError} />
-      )}
-
-      {plan === 'free' && !isReposLoading && (
-        <div className="flex flex-wrap items-center justify-between gap-3 border border-border bg-card px-4 py-3">
-          <p className="text-[13.5px] leading-relaxed text-muted-foreground">
-            {atLimit ? (
-              <>
-                <span className="font-medium text-foreground">Repository limit reached.</span>{' '}
-                Pro unlocks unlimited repositories, private repos, and every provider.
-              </>
-            ) : (
-              <>
-                <span className="font-medium text-foreground">Free plan</span> —{' '}
-                {Number.isFinite(maxRepos) ? `${maxRepos - repoCount} of ${maxRepos} slots left` : 'limited scope'}
-                . Pro adds unlimited + private repos, all providers, and persistent history.
-              </>
-            )}
-          </p>
-          <Button variant="ghost" size="sm" onClick={handleUpgrade} disabled={isUpgrading} className="gap-1">
-            {isUpgrading ? 'Opening checkout…' : 'Compare and upgrade'}
-            <ArrowRight className="h-3.5 w-3.5" />
-          </Button>
-        </div>
       )}
 
       {/* Query failure banner (e.g. Supabase auth misconfigured) */}
@@ -482,16 +296,10 @@ export default function DashboardPage() {
               <div id="repo-url-error">{urlError && <FieldError message={urlError} />}</div>
             </div>
 
-            {plan === 'free' ? (
-              <p className="text-[13px] leading-relaxed text-muted-foreground">
-                Free plan covers public repositories. Private repos need Pro
-                plus a linked GitHub account.
-              </p>
-            ) : (
-              <p className="text-[13px] leading-relaxed text-muted-foreground">
-                Private repositories work if your GitHub account is linked via Clerk.
-              </p>
-            )}
+            <p className="text-[13px] leading-relaxed text-muted-foreground">
+              Public repositories work out of the box. Private repositories
+              work when the server GitHub token can read them.
+            </p>
 
             <DialogFooter>
               <Button

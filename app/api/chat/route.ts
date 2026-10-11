@@ -5,7 +5,7 @@ import { retrieveRelevantChunks, buildContextPrompt } from '@/lib/rag/retriever'
 import { getActiveModelName } from '@/lib/rag/embedder';
 import { streamChat } from '@/lib/llm';
 import { extractLastUserText } from '@/lib/llm/extract-user-text';
-import { PLAN_LIMITS, type RepoMetadata } from '@/types';
+import type { RepoMetadata } from '@/types';
 import type { ModelMessage } from 'ai';
 
 export async function POST(req: NextRequest) {
@@ -37,24 +37,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 1. Get user and verify plan limits
-    const { data: userRow } = await supabaseAdmin
-      .from('users')
-      .select('plan')
-      .eq('id', userId)
-      .single();
-
-    const plan = userRow?.plan || 'free';
-    const limits = PLAN_LIMITS[plan as keyof typeof PLAN_LIMITS];
-
-    if (!limits.providers.includes(provider)) {
+    // All providers are available to everyone — validate the value only.
+    if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'gemini') {
       return NextResponse.json(
-        { error: `The ${provider} provider is only available on Pro plans. Please upgrade.` },
-        { status: 403 }
+        { error: `Unsupported provider: ${provider}. Expected openai, anthropic, or gemini.` },
+        { status: 400 }
       );
     }
 
-    // 2. Fetch repo details to ensure ownership + get name for system prompt
+    // 1. Fetch repo details to ensure ownership + get name for system prompt
     const { data: repo, error: repoError } = await supabaseAdmin
       .from('repos')
       .select('*')
@@ -84,7 +75,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Handle conversation creation/retrieval
+    // 2. Handle conversation creation/retrieval
     let conversationId = conversation_id;
     if (!conversationId) {
       const { data: newConv, error: convError } = await supabaseAdmin
@@ -102,10 +93,10 @@ export async function POST(req: NextRequest) {
       conversationId = newConv.id;
     }
 
-    // 4. Retrieve context chunks from vector store
+    // 3. Retrieve context chunks from vector store
     const chunks = await retrieveRelevantChunks(repo_id, userText, 10);
 
-    // 5. Fetch recent messages for conversation history
+    // 4. Fetch recent messages for conversation history
     const { data: dbMessages, error: msgError } = await supabaseAdmin
       .from('messages')
       .select('*')
@@ -132,7 +123,7 @@ export async function POST(req: NextRequest) {
       { role: 'user', content: userText },
     ];
 
-    // 6. Save current user message to DB
+    // 5. Save current user message to DB
     const { error: userInsertError } = await supabaseAdmin.from('messages').insert({
       conversation_id: conversationId,
       role: 'user',
@@ -143,14 +134,14 @@ export async function POST(req: NextRequest) {
       console.error('Failed to save user message:', userInsertError);
     }
 
-    // 7. Stream the response from the LLM
+    // 6. Stream the response from the LLM
     const result = await streamChat(
       { provider, api_key },
       coreMessages,
       systemPrompt
     );
 
-    // 8. Fire-and-forget: Persist assistant message when streaming completes
+    // 7. Fire-and-forget: Persist assistant message when streaming completes
     const sourceChunksJson = chunks.map((chunk) => ({
       file_path: chunk.file_path,
       content: chunk.content,

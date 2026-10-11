@@ -4,8 +4,7 @@ import { createClient } from '@supabase/supabase-js';
  * Service-role Supabase client — BYPASSES Row Level Security.
  * 
  * ⚠️  ONLY use this in:
- *   - Webhook handlers (Stripe, Razorpay)
- *   - Server-side admin operations (indexing pipeline, plan updates)
+ *   - Server-side admin operations (indexing pipeline, chat retrieval)
  * 
  * NEVER expose this client to the browser or import it in client components.
  */

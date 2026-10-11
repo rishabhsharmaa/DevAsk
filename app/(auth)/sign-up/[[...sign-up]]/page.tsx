@@ -9,7 +9,7 @@ export default function SignUpPage() {
   return (
     <AuthShell
       heading="Understand any codebase in minutes."
-      body="Create an account, paste a repository URL, and start asking. Free plan, no credit card."
+      body="Create an account, paste a repository URL, and start asking. Free, no credit card."
     >
       <SignUp
         appearance={{
