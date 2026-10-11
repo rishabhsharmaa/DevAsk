@@ -1,4 +1,5 @@
 import { SignUp } from '@clerk/nextjs';
+import { AuthShell } from '@/components/auth-shell';
 
 /**
  * Sign-up page using Clerk's pre-built SignUp component.
@@ -6,21 +7,23 @@ import { SignUp } from '@clerk/nextjs';
  */
 export default function SignUpPage() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background">
-      <div className="w-full max-w-md">
-        <SignUp
-          appearance={{
-            elements: {
-              rootBox: 'mx-auto',
-              card: 'bg-card border border-border shadow-xl shadow-black/20',
-              headerTitle: 'text-foreground',
-              headerSubtitle: 'text-muted-foreground',
-              formButtonPrimary: 'bg-primary hover:bg-primary/80',
-              footerActionLink: 'text-primary hover:text-primary/80',
-            },
-          }}
-        />
-      </div>
-    </main>
+    <AuthShell
+      heading="Understand any codebase in minutes."
+      body="Create an account, paste a repository URL, and start asking. Free plan, no credit card."
+    >
+      <SignUp
+        appearance={{
+          elements: {
+            rootBox: 'mx-auto w-full',
+            card: 'bg-card border border-border shadow-none w-full',
+            headerTitle: 'text-foreground',
+            headerSubtitle: 'text-muted-foreground',
+            formButtonPrimary: 'bg-primary hover:bg-primary/85 text-primary-foreground',
+            footerActionLink: 'text-signal hover:text-signal/80',
+            formFieldInput: 'bg-background border-input',
+          },
+        }}
+      />
+    </AuthShell>
   );
 }

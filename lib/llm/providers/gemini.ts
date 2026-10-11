@@ -7,7 +7,7 @@ import type { LanguageModel } from 'ai';
  * Creates a one-shot Gemini client using the user's BYOK API key.
  * Uses the Vercel AI SDK's @ai-sdk/google for native streaming support.
  * 
- * Default model: gemini-2.5-flash
+ * Default model: gemini-3.8-flash
  * 
  * Note: Gemini internally uses 'model' role instead of 'assistant'.
  * The Vercel AI SDK handles this role mapping automatically, so we
@@ -19,5 +19,5 @@ export function createGeminiModel(apiKey: string, model?: string): LanguageModel
     apiKey,
   });
 
-  return google(model ?? 'gemini-2.5-flash');
+  return google(model ?? 'gemini-3.8-flash');
 }

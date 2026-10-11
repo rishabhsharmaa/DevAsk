@@ -46,7 +46,7 @@ create table chunks (
   repo_id uuid not null references repos(id) on delete cascade,
   file_path text not null,
   content text not null,
-  embedding vector(1024),                     -- voyage-code-4 dimension (output_dimension=1024)
+  embedding vector(768),                      -- gemini-embedding-2 at 768 dims (default provider); voyage-code-4 used vector(1024)
   created_at timestamptz not null default now()
 );
 
@@ -164,7 +164,7 @@ create policy "Users can insert messages in own conversations" on messages
 -- Called by lib/rag/retriever.ts via supabase.rpc()
 -- ============================================
 create or replace function match_chunks(
-  query_embedding vector(1024),
+  query_embedding vector(768),
   target_repo_id uuid,
   match_threshold float default 0.3,
   match_count int default 10

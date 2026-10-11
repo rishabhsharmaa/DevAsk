@@ -6,14 +6,18 @@ import { useRouter } from 'next/navigation';
 import { useUser, useAuth } from '@clerk/nextjs';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import { ArrowLeft, RefreshCw, AlertTriangle, FileCode, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, PanelLeft } from 'lucide-react';
 import { supabase, setBrowserTokenGetter } from '@/lib/supabase/client';
 import { FileExplorer } from '@/components/file-explorer';
 import { ChatInput } from '@/components/chat/chat-input';
 import { MessageList } from '@/components/chat/message-list';
 import { ProviderSelector } from '@/components/provider-selector';
-import { Progress } from '@/components/ui/progress';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { CodeViewer } from '@/components/code-viewer';
+import { SourceRow } from '@/components/source-row';
+import { StatusBadge } from '@/components/status';
+import { InlineError } from '@/components/state';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { LLMProvider, Plan, Repo, SourceChunk, Message } from '@/types';
 
@@ -23,6 +27,30 @@ interface ChatMessageInit {
   role: 'user' | 'assistant';
   parts: { type: 'text'; text: string }[];
   metadata: { source_chunks: SourceChunk[] | null };
+}
+
+function elapsedSince(iso: string, now: number): string {
+  const start = new Date(iso).getTime();
+  if (Number.isNaN(start)) return '—';
+  const s = Math.max(0, Math.floor((now - start) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+}
+
+/** Short display name for a stamped embedding model id (never fabricated). */
+function embeddingDisplayName(id: string): string {
+  const low = id.toLowerCase();
+  if (low.includes('gemini-embedding')) return 'Gemini Embedding';
+  if (low.includes('voyage-code')) return 'Voyage Code';
+  return id.length > 34 ? `${id.slice(0, 33)}…` : id;
+}
+
+/** Where stamped embeddings ran, when the model id makes it unambiguous. */
+function embeddingOrigin(id: string): string | null {
+  const low = id.toLowerCase();
+  if (low.includes('voyage') || low.includes('gemini')) return 'API';
+  return null;
 }
 
 export default function RepoChatPage({
@@ -44,18 +72,24 @@ export default function RepoChatPage({
   const [repo, setRepo] = useState<Repo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [files, setFiles] = useState<{ path: string }[]>([]);
+  const [chunkTotal, setChunkTotal] = useState<number | null>(null);
   const [plan, setPlan] = useState<Plan>('free');
   const [conversationId, setConversationId] = useState<string | null>(null);
 
-  // Status Polling for Pending/Indexing Repos
-  const [indexingProgress, setIndexingProgress] = useState(0);
-  const [statusMessage, setStatusMessage] = useState('Checking index status...');
+  // Live indexing facts from the status API (never fabricated).
+  const [liveFileCount, setLiveFileCount] = useState<number | null>(null);
+  const [liveChunkCount, setLiveChunkCount] = useState<number | null>(null);
+  const [liveChunkTotal, setLiveChunkTotal] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   // UI / LLM State
   const [provider, setProvider] = useState<LLMProvider>('openai');
   const [apiKey, setApiKey] = useState('');
+  const [providerOpen, setProviderOpen] = useState(false);
+  const [explorerOpen, setExplorerOpen] = useState(false);
   const [activeCodeViewer, setActiveCodeViewer] = useState<{ path: string; content: string } | null>(null);
   const [activeCitation, setActiveCitation] = useState<SourceChunk | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [initialMessages, setInitialMessages] = useState<ChatMessageInit[]>([]);
 
   // Load files and existing chat history
@@ -69,6 +103,7 @@ export default function RepoChatPage({
 
       const uniquePaths = Array.from(new Set(chunks?.map((c) => c.file_path) || [])).map((p) => ({ path: p }));
       setFiles(uniquePaths);
+      setChunkTotal(chunks?.length ?? null);
 
       // 2. Fetch existing conversation for this repo
       const { data: convs } = await supabase
@@ -154,36 +189,46 @@ export default function RepoChatPage({
   useEffect(() => {
     if (!repo || repo.index_status === 'ready' || repo.index_status === 'failed') return;
 
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/repo/status?repo_id=${repoId}`);
         if (!res.ok) return;
 
         const data = await res.json();
-        
+        if (typeof data.file_count === 'number') setLiveFileCount(data.file_count);
+        if (typeof data.chunk_count === 'number') setLiveChunkCount(data.chunk_count);
+        if (typeof data.metadata?.total_chunks === 'number') setLiveChunkTotal(data.metadata.total_chunks);
+
         if (data.index_status === 'ready') {
           clearInterval(interval);
-          setRepo((prev) => prev ? { ...prev, index_status: 'ready' } : null);
+          // Refetch the row: the server stamped language + embedding metadata
+          // at ready-time, and the mounted copy predates it.
+          const { data: fresh } = await supabase
+            .from('repos')
+            .select('*')
+            .eq('id', repoId)
+            .single();
+          setRepo((prev) => ((fresh as Repo | null) ?? (prev ? { ...prev, index_status: 'ready' } : null)));
           if (user) loadFilesAndHistory(user.id);
         } else if (data.index_status === 'failed') {
           clearInterval(interval);
           setRepo((prev) => prev ? { ...prev, index_status: 'failed' } : null);
-        } else {
-          // Adjust fake progress bar
-          setIndexingProgress((prev) => Math.min(prev + 10, 95));
-          setStatusMessage(
-            data.index_status === 'indexing'
-              ? `Processing: Chunks embedded (${data.chunk_count} blocks generated)...`
-              : 'Queueing files for parsing...'
-          );
+        } else if (data.index_status) {
+          setRepo((prev) => prev ? { ...prev, index_status: data.index_status } : null);
         }
       } catch (err) {
         console.error('Error polling repo status:', err);
       }
     }, 3000);
 
-    return () => clearInterval(interval);
-  }, [repo, repoId, user]);
+    return () => {
+      clearInterval(interval);
+      clearInterval(tick);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo?.index_status, repoId, user]);
 
   // Static chat transport. useChat instantiates its Chat (and captures our
   // transport) exactly once on first render, so request fields MUST NOT come
@@ -218,7 +263,7 @@ export default function RepoChatPage({
   } = useChat({
     transport,
     messages: initialMessages,
-    onFinish: ({ message }) => {
+    onFinish: () => {
       // Refetch history to sync database message IDs and source chunk citations
       if (user && conversationId) {
         loadHistoryOnly(conversationId);
@@ -245,6 +290,20 @@ export default function RepoChatPage({
       created_at: '',
     };
   });
+
+  // Sources behind the latest answer — shown in the context panel.
+  const latestSources: SourceChunk[] =
+    [...uiMessagesForList].reverse().find((m) => m.role === 'assistant' && m.source_chunks?.length)
+      ?.source_chunks ?? [];
+
+  // Embedding stamp recorded at index time (absent on legacy indexes).
+  const stampedModel = repo?.metadata?.embedding_model ?? null;
+  const stampedDims = repo?.metadata?.embedding_dimensions ?? null;
+  const stampedSub = stampedModel
+    ? [embeddingOrigin(stampedModel), stampedDims != null ? `${stampedDims} dimensions` : null]
+        .filter(Boolean)
+        .join(' · ')
+    : null;
 
   // Keep useChat synced when initialMessages loads asynchronously
   useEffect(() => {
@@ -276,7 +335,7 @@ export default function RepoChatPage({
   // Handle starter questions click
   const handleStarterQuestion = (question: string) => {
     if (!apiKey) {
-      alert('Please enter your LLM API key first.');
+      setProviderOpen(true);
       return;
     }
     sendMessage(
@@ -295,7 +354,7 @@ export default function RepoChatPage({
   // Handle chat submission
   const handleChatSubmit = (text: string) => {
     if (!apiKey) {
-      alert('Please enter your LLM API key first.');
+      setProviderOpen(true);
       return;
     }
     sendMessage(
@@ -313,6 +372,7 @@ export default function RepoChatPage({
 
   // Open file content explorer
   const handleFileClick = async (filePath: string) => {
+    setFileError(null);
     try {
       const { data: chunks, error } = await supabase
         .from('chunks')
@@ -327,9 +387,10 @@ export default function RepoChatPage({
 
       // Reconstruct file by stitching chunks together
       const fullContent = chunks.map((c) => c.content.replace(/^\/\/ File: .*\n/, '')).join('\n');
+      setExplorerOpen(false);
       setActiveCodeViewer({ path: filePath, content: fullContent });
     } catch (err) {
-      alert(
+      setFileError(
         `Could not fetch file contents: ${err instanceof Error ? err.message : String(err)}`
       );
     }
@@ -338,174 +399,336 @@ export default function RepoChatPage({
   // Load-failure UI (an actionable error instead of an infinite spinner)
   if (loadError) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 bg-background max-w-md mx-auto text-center">
-        <div className="w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center mb-4 border border-destructive/20">
-          <AlertTriangle className="w-6 h-6 text-destructive" />
+      <div className="flex flex-1 items-center justify-center bg-background p-6">
+        <div className="w-full max-w-md">
+          <InlineError
+            title="Couldn't load repository"
+            body={loadError}
+            action={{ label: 'Back to dashboard', onClick: () => router.push('/dashboard') }}
+          />
         </div>
-        <h3 className="text-lg font-semibold mb-2">Couldn&apos;t load repository</h3>
-        <p className="text-sm text-muted-foreground mb-6">{loadError}</p>
-        <Button onClick={() => router.push('/dashboard')} variant="outline">
-          Back to Dashboard
-        </Button>
       </div>
     );
   }
 
-  // Loading UI screen
+  // Loading skeleton mirrors the workspace shape
   if (!repo) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 bg-background">
-        <RefreshCw className="w-8 h-8 text-primary animate-spin mb-4" />
-        <p className="text-sm text-muted-foreground">Loading repository...</p>
+      <div className="flex h-full min-h-0 flex-1 animate-pulse flex-col" aria-label="Loading repository workspace">
+        <div className="flex h-13 items-center justify-between border-b border-border px-4 sm:px-6">
+          <div className="h-4 w-48 bg-muted" />
+          <div className="h-8 w-40 bg-muted" />
+        </div>
+        <div className="grid min-h-0 flex-1 lg:grid-cols-[260px_minmax(0,1fr)]">
+          <div className="hidden space-y-2 border-r border-border p-4 lg:block">
+            <div className="h-8 bg-muted" />
+            <div className="h-3 w-3/4 bg-muted/70" />
+            <div className="h-3 w-2/3 bg-muted/70" />
+            <div className="h-3 w-1/2 bg-muted/70" />
+          </div>
+          <div className="mx-auto w-full max-w-3xl space-y-4 p-6">
+            <div className="h-4 w-2/3 bg-muted" />
+            <div className="h-4 w-full bg-muted/70" />
+            <div className="h-4 w-5/6 bg-muted/70" />
+            <div className="h-4 w-1/3 bg-muted/70" />
+          </div>
+        </div>
       </div>
     );
   }
 
-  // Pending / Indexing UI progress screen
+  // Pending / Indexing / Failed states — honest, no fabricated progress.
   if (repo.index_status !== 'ready') {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 bg-background max-w-md mx-auto text-center">
-        {repo.index_status === 'failed' ? (
-          <>
-            <div className="w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center mb-4 border border-destructive/20">
-              <AlertTriangle className="w-6 h-6 text-destructive" />
+      <div className="flex flex-1 items-center justify-center overflow-y-auto bg-background p-6">
+        <div className="w-full max-w-lg">
+          <p className="truncate font-mono text-xs text-muted-foreground">
+            {repo.owner}/{repo.name}
+          </p>
+          {repo.index_status === 'failed' ? (
+            <div className="mt-3">
+              <InlineError
+                title="Indexing failed"
+                body={repo.metadata?.error_message || 'An error occurred during repository ingestion.'}
+                action={{ label: 'Back to dashboard', onClick: () => router.push('/dashboard') }}
+              />
             </div>
-            <h3 className="text-lg font-semibold mb-2">Indexing Failed</h3>
-            <p className="text-sm text-muted-foreground mb-6">
-              {repo.metadata?.error_message || 'An error occurred during repository ingestion.'}
-            </p>
-            <Button onClick={() => router.push('/dashboard')} variant="outline">
-              Back to Dashboard
-            </Button>
-          </>
-        ) : (
-          <>
-            <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4 animate-pulse">
-              <RefreshCw className="w-6 h-6 text-primary animate-spin" />
+          ) : (
+            <div className="mt-3 border border-border bg-card">
+              <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+                <h2 className="text-[15px] font-semibold tracking-tight">
+                  {repo.index_status === 'indexing' ? 'Indexing codebase' : 'Queued for indexing'}
+                </h2>
+                <StatusBadge status={repo.index_status} />
+              </div>
+              <dl className="grid grid-cols-3 divide-x divide-border border-b border-border">
+                <div className="px-4 py-3">
+                  <dt className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">Files</dt>
+                  <dd className="mt-0.5 font-mono text-sm tabular">
+                    {liveFileCount != null ? liveFileCount.toLocaleString() : '—'}
+                  </dd>
+                </div>
+                <div className="px-4 py-3">
+                  <dt className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">Chunks</dt>
+                  <dd className="mt-0.5 font-mono text-sm tabular">
+                    {liveChunkCount != null ? liveChunkCount.toLocaleString() : '—'}
+                    {liveChunkTotal != null && liveChunkTotal > 0 && (
+                      <span className="text-muted-foreground"> / {liveChunkTotal.toLocaleString()}</span>
+                    )}
+                  </dd>
+                </div>
+                <div className="px-4 py-3">
+                  <dt className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">Elapsed</dt>
+                  <dd className="mt-0.5 font-mono text-sm tabular">{elapsedSince(repo.created_at, now)}</dd>
+                </div>
+              </dl>
+              <div className="px-4 py-3">
+                <ol className="space-y-2 text-[13px]">
+                  <IndexStep done label="Repository queued" />
+                  <IndexStep
+                    done={repo.index_status === 'indexing'}
+                    active={repo.index_status === 'indexing'}
+                    label="Crawling files and generating embeddings"
+                  />
+                  <IndexStep label="Ready to chat" />
+                </ol>
+                <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">
+                  This page updates live. Embeddings run online via the Gemini
+                  API, paced for the free tier — large repos take a few minutes.
+                  You can leave and come back.
+                </p>
+                <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard')} className="mt-2 gap-1.5 px-0">
+                  <ArrowLeft className="h-3.5 w-3.5" /> Return to dashboard
+                </Button>
+              </div>
             </div>
-            <h3 className="text-lg font-semibold mb-1">Ingesting Codebase</h3>
-            <p className="text-xs text-muted-foreground mb-6 font-mono">{repo.owner}/{repo.name}</p>
-            
-            <Progress value={indexingProgress} className="h-2 w-full mb-3" />
-            <p className="text-xs text-muted-foreground italic mb-8">{statusMessage}</p>
-
-            <Button onClick={() => router.push('/dashboard')} variant="ghost" size="sm">
-              <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Return to Dashboard
-            </Button>
-          </>
-        )}
+          )}
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 grid grid-cols-1 lg:grid-cols-[280px_1fr] h-full overflow-hidden bg-background">
-      {/* File Explorer Panel */}
-      <div className="hidden lg:block h-full">
-        <FileExplorer files={files} onFileClick={handleFileClick} />
-      </div>
-
-      {/* Main Chat and control area */}
-      <div className="flex flex-col h-full overflow-hidden">
-        {/* Top Control Bar */}
-        <header className="flex items-center justify-between px-6 py-3 border-b border-border bg-card/25">
-          <div className="flex items-center gap-3">
-            <Link
-              href="/dashboard"
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" /> Dashboard
-            </Link>
-            <span className="text-muted-foreground/40">/</span>
-            <span className="text-sm font-semibold truncate max-w-[200px] font-mono">
-              {repo.owner}/{repo.name}
-            </span>
+    <div className="flex h-full min-h-0 flex-1 flex-col bg-background">
+      {/* Workspace top bar — always answers "where am I?" */}
+      <header className="flex h-13 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-3 sm:px-4">
+        <div className="flex min-w-0 items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="lg:hidden"
+            onClick={() => setExplorerOpen(true)}
+            aria-label="Open file explorer"
+          >
+            <PanelLeft className="h-4 w-4" />
+          </Button>
+          <Link
+            href="/dashboard"
+            className="hidden flex-shrink-0 items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span className="hidden md:inline">Dashboard</span>
+          </Link>
+          <span aria-hidden className="hidden flex-shrink-0 text-muted-foreground/40 sm:inline">/</span>
+          <p className="truncate font-mono text-sm font-semibold tracking-tight">
+            {repo.owner}<span className="font-medium text-muted-foreground/60">/</span>{repo.name}
+          </p>
+          <div
+            className="hidden flex-shrink-0 sm:block"
+            title={`${files.length.toLocaleString()} files · ${chunkTotal != null ? chunkTotal.toLocaleString() : '—'} chunks`}
+          >
+            <StatusBadge status={repo.index_status} />
           </div>
+        </div>
 
-          <div className="flex items-center gap-2">
-            <ProviderSelector
-              provider={provider}
-              setProvider={setProvider}
-              apiKey={apiKey}
-              setApiKey={setApiKey}
-              plan={plan}
+        <div className="flex flex-shrink-0 items-center">
+          <ProviderSelector
+            provider={provider}
+            setProvider={setProvider}
+            apiKey={apiKey}
+            setApiKey={setApiKey}
+            plan={plan}
+            open={providerOpen}
+            onOpenChange={setProviderOpen}
+          />
+        </div>
+      </header>
+
+      {fileError && (
+        <div className="flex-shrink-0 border-b border-border px-3 py-2 sm:px-4">
+          <InlineError title="File unavailable" body={fileError} />
+        </div>
+      )}
+
+      {/* Three regions — collapse gracefully by viewport.
+          Each pane is an independent surface: fixed tracks never yield to
+          content (min-w-0 + overflow clip on asides), so explorer expansion
+          cannot resize or reflow the conversation. */}
+      <div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-x-clip lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[260px_minmax(0,1fr)_280px]">
+        {/* LEFT: explorer (drawer below lg) */}
+        <aside className="hidden min-h-0 min-w-0 flex-col overflow-hidden border-r border-border lg:flex" aria-label="File explorer">
+          <FileExplorer files={files} onFileClick={handleFileClick} selectedPath={activeCodeViewer?.path} />
+        </aside>
+
+        {/* CENTER: conversation */}
+        <div className="flex min-h-0 min-w-0 flex-col">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            <MessageList
+              messages={uiMessagesForList}
+              onStarterClick={handleStarterQuestion}
+              isLoading={isLoading}
+              onCitationClick={(chunk) => setActiveCitation(chunk)}
             />
           </div>
-        </header>
 
-        {/* Chat Message List */}
-        <div className="flex-1 overflow-hidden flex flex-col">
-          <MessageList
-            messages={uiMessagesForList}
-            onStarterClick={handleStarterQuestion}
-            isLoading={isLoading}
-            onCitationClick={(chunk) => setActiveCitation(chunk)}
-          />
-        </div>
-
-        {/* Input Bar */}
-        <div className="px-6 py-4 border-t border-border bg-background">
-          {chatError && (
-            <div
-              role="alert"
-              className="mb-2 flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-            >
-              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-              <span>Failed to send message: {chatError.message}</span>
+          <div className="flex-shrink-0 border-t border-border bg-background px-3 py-3 sm:px-4">
+            <div className="mx-auto w-full max-w-3xl">
+              {chatError && (
+                <div className="mb-2">
+                  <InlineError title="Message failed to send" body={chatError.message} />
+                </div>
+              )}
+              <ChatInput
+                onSubmit={handleChatSubmit}
+                isLoading={isLoading}
+                disabled={!apiKey}
+                provider={provider}
+                hasKey={!!apiKey}
+                onConnectKey={() => setProviderOpen(true)}
+              />
             </div>
-          )}
-          <ChatInput
-            onSubmit={handleChatSubmit}
-            isLoading={isLoading}
-            disabled={!apiKey}
-          />
+          </div>
         </div>
+
+        {/* RIGHT: repository index (xl and up) */}
+        <aside className="hidden min-h-0 min-w-0 flex-col overflow-hidden border-l border-border xl:flex" aria-label="Repository index">
+          <div className="flex-shrink-0 border-b border-border p-4">
+            <p className="label-micro text-muted-foreground">Index</p>
+            <div className="mt-3">
+              <p className="font-mono text-[26px] leading-none tabular">
+                {files.length.toLocaleString()}
+              </p>
+              <p className="label-micro mt-1.5 text-muted-foreground">Files</p>
+            </div>
+            <div className="mt-4">
+              <p className="font-mono text-[26px] leading-none tabular">
+                {chunkTotal != null ? chunkTotal.toLocaleString() : '—'}
+              </p>
+              <p className="label-micro mt-1.5 text-muted-foreground">Chunks</p>
+            </div>
+            <div className="mt-4">
+              <p className="truncate text-sm font-medium">{repo.language ?? '—'}</p>
+              <p className="label-micro mt-1.5 text-muted-foreground">Primary language</p>
+            </div>
+            <div className="mt-4 border-t border-border/70 pt-3">
+              <p className="label-micro text-muted-foreground">Embeddings</p>
+              {stampedModel ? (
+                <>
+                  <p className="mt-1.5 truncate text-sm font-medium">
+                    {embeddingDisplayName(stampedModel)}
+                  </p>
+                  {stampedSub && (
+                    <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">{stampedSub}</p>
+                  )}
+                </>
+              ) : (
+                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                  Not recorded for this index.
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain p-4 [scrollbar-gutter:stable]">
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="label-micro text-muted-foreground">Latest sources</p>
+              {latestSources.length > 0 && (
+                <p className="font-mono text-[11px] text-muted-foreground/70 tabular">
+                  {latestSources.length}
+                </p>
+              )}
+            </div>
+            {latestSources.length === 0 ? (
+              <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
+                Sources cited by the most recent answer appear here for quick inspection.
+              </p>
+            ) : (
+              <div className="mt-1 divide-y divide-border/60">
+                {latestSources.map((chunk, i) => (
+                  <SourceRow
+                    key={`${chunk.file_path}-${i}`}
+                    index={i}
+                    chunk={chunk}
+                    onOpen={(c) => setActiveCitation(c)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </aside>
       </div>
 
-      {/* Code Viewer Modal */}
+      {/* Mobile explorer drawer */}
+      <Sheet open={explorerOpen} onOpenChange={setExplorerOpen}>
+        <SheetContent side="left" className="w-72 p-0 sm:w-80">
+          <SheetHeader className="sr-only">
+            <SheetTitle>File explorer</SheetTitle>
+          </SheetHeader>
+          <FileExplorer files={files} onFileClick={handleFileClick} selectedPath={activeCodeViewer?.path} />
+        </SheetContent>
+      </Sheet>
+
+      {/* Code viewer dialog */}
       <Dialog open={activeCodeViewer !== null} onOpenChange={(open) => !open && setActiveCodeViewer(null)}>
-        <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col p-0 overflow-hidden bg-card border border-border">
+        <DialogContent className="max-h-[85vh] max-w-4xl overflow-hidden p-0">
+          <DialogTitle className="sr-only">
+            {activeCodeViewer ? `File: ${activeCodeViewer.path}` : 'File viewer'}
+          </DialogTitle>
           {activeCodeViewer && (
-            <>
-              <DialogHeader className="p-4 border-b border-border bg-muted/40">
-                <DialogTitle className="font-mono text-sm flex items-center gap-2">
-                  <FileCode className="w-4 h-4 text-emerald-400" />
-                  {activeCodeViewer.path}
-                </DialogTitle>
-                <DialogDescription className="text-xs">
-                  Full stiched file contents fetched directly from DB.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="flex-1 overflow-auto p-4 bg-muted/10 font-mono text-xs leading-relaxed whitespace-pre-wrap select-all">
-                {activeCodeViewer.content}
-              </div>
-            </>
+            <CodeViewer
+              path={activeCodeViewer.path}
+              content={activeCodeViewer.content}
+              className="max-h-[85vh] border-0"
+              headerClassName="pr-12"
+            />
           )}
         </DialogContent>
       </Dialog>
 
-      {/* Citation Snippet Modal */}
+      {/* Citation inspector dialog */}
       <Dialog open={activeCitation !== null} onOpenChange={(open) => !open && setActiveCitation(null)}>
-        <DialogContent className="max-w-3xl max-h-[70vh] flex flex-col p-0 overflow-hidden bg-card border border-border">
+        <DialogContent className="max-h-[80vh] max-w-3xl overflow-hidden p-0">
+          <DialogTitle className="sr-only">
+            {activeCitation ? `Cited source: ${activeCitation.file_path}` : 'Cited source'}
+          </DialogTitle>
           {activeCitation && (
-            <>
-              <DialogHeader className="p-4 border-b border-border bg-muted/40">
-                <DialogTitle className="font-mono text-sm flex items-center gap-2">
-                  <FileCode className="w-4 h-4 text-primary" />
-                  {activeCitation.file_path}
-                </DialogTitle>
-                <DialogDescription className="text-xs">
-                  RAG Cosine Match Chunk Source.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="flex-1 overflow-auto p-4 bg-muted/10 font-mono text-xs leading-relaxed whitespace-pre-wrap select-all">
-                {activeCitation.content}
-              </div>
-            </>
+            <CodeViewer
+              path={activeCitation.file_path}
+              content={activeCitation.content}
+              similarity={activeCitation.similarity}
+              className="max-h-[80vh] border-0"
+              headerClassName="pr-12"
+            />
           )}
         </DialogContent>
       </Dialog>
     </div>
   );
 }
-export const dynamic = 'force-dynamic';
+
+function IndexStep({ done, active, label }: { done?: boolean; active?: boolean; label: string }) {
+  return (
+    <li className="flex items-center gap-2.5">
+      <span
+        aria-hidden
+        className={
+          done
+            ? 'h-1.5 w-1.5 rounded-full bg-success'
+            : active
+              ? 'h-1.5 w-1.5 animate-status-breathe rounded-full bg-signal'
+              : 'h-1.5 w-1.5 rounded-full bg-muted-foreground/30'
+        }
+      />
+      <span className={done || active ? 'text-foreground' : 'text-muted-foreground'}>{label}</span>
+    </li>
+  );
+}

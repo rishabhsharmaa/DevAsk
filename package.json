@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "NEXT_PUBLIC_SUPABASE_URL=https://supabase.test.local SUPABASE_SERVICE_ROLE_KEY=test-placeholder-key tsx --test tests/embedder.test.ts",
+    "benchmark:embeddings": "tsx scripts/benchmark-local-embeddings.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.90",
@@ -20,6 +22,7 @@
     "@google/generative-ai": "^0.24.1",
     "@octokit/rest": "^22.0.1",
     "@supabase/supabase-js": "^2.109.0",
+    "@swc/helpers": "^0.5.23",
     "@tanstack/react-query": "^5.101.2",
     "@types/uuid": "^10.0.0",
     "ai": "^6.0.216",
@@ -46,9 +49,12 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/ws": "^8.18.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "^4.23.15",
+    "typescript": "^5",
+    "ws": "^8.22.0"
   }
 }

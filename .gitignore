@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# local embedding model cache (Transformers.js, see LOCAL_EMBEDDING_CACHE_DIR)
+/.cache/
+
 # production
 /build
 

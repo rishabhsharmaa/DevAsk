@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ArrowDown, ArrowRight } from 'lucide-react';
 import { MessageBubble } from './message-bubble';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { HelpCircle, Sparkles, MessageSquare, Terminal } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import type { Message, SourceChunk } from '@/types';
 
 interface MessageListProps {
@@ -13,11 +13,27 @@ interface MessageListProps {
   onCitationClick?: (chunk: SourceChunk) => void;
 }
 
-const STARTER_QUESTIONS = [
-  'What is the core purpose of this codebase?',
-  'Explain the overall architecture and folder layout.',
-  'How does user authentication work here?',
-  'Where are the main database queries or schemas defined?',
+const STARTERS = [
+  {
+    title: 'Architecture',
+    sub: 'Understand the stack',
+    prompt: 'Explain the authentication architecture.',
+  },
+  {
+    title: 'Find implementation',
+    sub: 'Locate a feature',
+    prompt: 'Where is repository indexing implemented?',
+  },
+  {
+    title: 'Trace a flow',
+    sub: 'Follow code paths',
+    prompt: 'Trace the request from the chat UI to the LLM.',
+  },
+  {
+    title: 'Find bottlenecks',
+    sub: 'Spot architectural risks',
+    prompt: 'Find potential architectural bottlenecks.',
+  },
 ];
 
 export function MessageList({
@@ -27,67 +43,114 @@ export function MessageList({
   onCitationClick,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [stickToBottom, setStickToBottom] = useState(true);
+  const [showJumpButton, setShowJumpButton] = useState(false);
 
-  // Auto scroll to bottom
+  // Follow the stream only while the reader is already at the bottom.
   useEffect(() => {
-    const scrollContainer = scrollRef.current?.querySelector('[data-radix-scroll-area-viewport]');
-    if (scrollContainer) {
-      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    const el = scrollRef.current;
+    if (el && stickToBottom) {
+      el.scrollTop = el.scrollHeight;
     }
-  }, [messages, isLoading]);
+  }, [messages, isLoading, stickToBottom]);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distance < 48;
+    setStickToBottom(atBottom);
+    setShowJumpButton(!atBottom && messages.length > 0);
+  };
+
+  const jumpToLatest = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    setStickToBottom(true);
+    setShowJumpButton(false);
+  };
 
   if (messages.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center animate-fade-in">
-        <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-          <Sparkles className="w-6 h-6 text-primary" />
-        </div>
-        <h3 className="text-lg font-semibold mb-2">Welcome to DevAsk!</h3>
-        <p className="text-sm text-muted-foreground max-w-sm mb-8">
-          The entire codebase has been indexed. Ask any questions, or click one of the suggestions below to get started:
-        </p>
+      <div className="flex min-h-0 w-full flex-1 flex-col justify-center overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-8 [scrollbar-gutter:stable] sm:px-6">
+        <div className="mx-auto w-full max-w-2xl animate-fade-in">
+          <p className="label-micro text-muted-foreground">Understand this repository</p>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight">
+            What would you like to investigate?
+          </h2>
+          <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+            The full index is loaded. Every answer cites the files it came from —
+            open any source to verify.
+          </p>
 
-        <div className="grid sm:grid-cols-2 gap-3 max-w-xl w-full">
-          {STARTER_QUESTIONS.map((question) => (
-            <button
-              key={question}
-              onClick={() => onStarterClick(question)}
-              className="flex items-start gap-3 rounded-xl border border-border bg-card/50 p-4 text-left text-sm hover:bg-muted hover:border-primary/30 transition-all cursor-pointer"
-            >
-              <MessageSquare className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-              <span>{question}</span>
-            </button>
-          ))}
+          <div className="mt-6 grid gap-2 sm:grid-cols-2">
+            {STARTERS.map((starter) => (
+              <button
+                key={starter.title}
+                type="button"
+                onClick={() => onStarterClick(starter.prompt)}
+                className="group border border-border bg-card/40 p-4 text-left transition-colors hover:border-signal/40 hover:bg-card"
+              >
+                <span className="flex items-center justify-between gap-2 text-sm font-medium">
+                  {starter.title}
+                  <ArrowRight className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground transition-all group-hover:translate-x-0.5 group-hover:text-signal" />
+                </span>
+                <span className="mt-1 block text-xs text-muted-foreground">{starter.sub}</span>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     );
   }
 
-  return (
-    <ScrollArea ref={scrollRef} className="flex-1 px-6 py-4">
-      <div className="flex flex-col min-w-full pb-10">
-        {messages.map((message) => (
-          <MessageBubble
-            key={message.id}
-            message={message}
-            onCitationClick={onCitationClick}
-          />
-        ))}
+  const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id;
 
-        {isLoading && (
-          <div className="flex w-full gap-3 justify-start animate-fade-in">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center flex-shrink-0">
-              <Terminal className="w-4 h-4 text-emerald-400" />
+  return (
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-6 [scrollbar-gutter:stable] sm:px-6"
+        aria-live="polite"
+      >
+        <div className="mx-auto w-full max-w-3xl space-y-7 pb-4">
+          {messages.map((message, i) => (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              first={i === 0}
+              streaming={isLoading && message.id === lastAssistantId && message.role === 'assistant'}
+              onCitationClick={onCitationClick}
+            />
+          ))}
+
+          {isLoading && messages[messages.length - 1]?.role === 'user' && (
+            <div className="animate-fade-in" role="status">
+              <span className="label-micro text-signal">DevAsk</span>
+              <p className="mt-1.5 text-[13px] text-muted-foreground">
+                Searching the index<span className="animate-status-breathe">…</span>
+              </p>
             </div>
-            <div className="rounded-xl px-4 py-3 bg-card border border-border text-foreground rounded-tl-none flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-2 h-2 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-2 h-2 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '300ms' }} />
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
-    </ScrollArea>
+
+      <button
+        type="button"
+        onClick={jumpToLatest}
+        aria-hidden={!showJumpButton}
+        tabIndex={showJumpButton ? 0 : -1}
+        className={cn(
+          'absolute bottom-4 left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 border border-border bg-card px-3 py-1.5 font-mono text-[11.5px] text-muted-foreground shadow-lg transition-all hover:text-foreground',
+          showJumpButton ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-2 opacity-0'
+        )}
+      >
+        <ArrowDown className="h-3 w-3" />
+        latest
+      </button>
+    </div>
   );
 }
 export default MessageList;

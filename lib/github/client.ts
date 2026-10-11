@@ -20,11 +20,22 @@ const EXCLUDED_PATHS = [
   '.next/',
   'dist/',
   'build/',
+  'coverage/',
   '__pycache__/',
   '.venv/',
   'vendor/',
   '.gradle/',
   'target/',        // Rust/Java build output
+];
+
+// --- Generated / low-signal files to skip (embedding them wastes quota) ---
+const SKIP_SUFFIXES = [
+  '.min.js',
+  '.min.css',
+  '.bundle.js',
+  '.bundle.css',
+  '.map',
+  '.log',
 ];
 
 // --- Lockfiles to skip ---
@@ -86,6 +97,12 @@ function shouldExclude(path: string): boolean {
   // Check lockfiles
   const filename = path.split('/').pop() || '';
   if (LOCKFILES.has(filename)) {
+    return true;
+  }
+
+  // Check generated / low-signal files
+  const lower = path.toLowerCase();
+  if (SKIP_SUFFIXES.some((suffix) => lower.endsWith(suffix))) {
     return true;
   }
 

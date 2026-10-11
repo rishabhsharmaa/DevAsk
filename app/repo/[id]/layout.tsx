@@ -30,7 +30,7 @@ export default async function RepoLayout({
 
   return (
     <Providers>
-      <div className="flex-1 flex flex-col h-screen overflow-hidden">
+      <div className="flex-1 flex flex-col h-dvh min-h-0 overflow-hidden">
         {children}
       </div>
     </Providers>

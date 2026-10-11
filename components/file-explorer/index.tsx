@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
-import { Folder, FolderOpen, File, FileCode, Search, ChevronRight, ChevronDown } from 'lucide-react';
+import { Folder, FolderOpen, FileCode2, File, Search, ChevronRight } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
@@ -15,6 +15,8 @@ interface FileNode {
 interface FileExplorerProps {
   files: { path: string }[];
   onFileClick: (path: string) => void;
+  selectedPath?: string | null;
+  className?: string;
 }
 
 // Convert flat file paths into a nested tree node structure
@@ -50,7 +52,20 @@ function buildTree(paths: { path: string }[]): FileNode {
   return root;
 }
 
-export function FileExplorer({ files, onFileClick }: FileExplorerProps) {
+function sortNodes(a: FileNode, b: FileNode): number {
+  // Folders first, then alphabetically
+  if (a.isFolder && !b.isFolder) return -1;
+  if (!a.isFolder && b.isFolder) return 1;
+  return a.name.localeCompare(b.name);
+}
+
+const CODE_EXTENSIONS = new Set([
+  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'json', 'py', 'rb',
+  'rs', 'go', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'hpp',
+  'cs', 'sql', 'html', 'css', 'scss', 'vue', 'svelte', 'sh',
+]);
+
+export function FileExplorer({ files, onFileClick, selectedPath, className }: FileExplorerProps) {
   const [search, setSearch] = useState('');
 
   const filteredFiles = useMemo(() => {
@@ -60,41 +75,77 @@ export function FileExplorer({ files, onFileClick }: FileExplorerProps) {
   }, [files, search]);
 
   const treeRoot = useMemo(() => buildTree(filteredFiles), [filteredFiles]);
+  const searching = search.length > 0;
 
   return (
-    <div className="flex flex-col h-full bg-card/30 backdrop-blur-sm border-r border-border w-full">
-      <div className="p-4 border-b border-border flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Codebase Explorer
+    <div className={cn('flex min-h-0 min-w-0 flex-1 flex-col bg-background', className)}>
+      <div className="flex flex-col gap-2.5 border-b border-border p-3">
+        <div className="flex items-center justify-between px-0.5">
+          <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+            Explorer
           </span>
-          <span className="text-[10px] font-mono bg-muted text-muted-foreground px-1.5 py-0.5 rounded">
-            {files.length} Files
+          <span className="font-mono text-[11px] text-muted-foreground tabular">
+            {searching ? `${filteredFiles.length} / ${files.length}` : files.length}
           </span>
         </div>
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Search className="absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          {/* Not a credential field: neutral name + autocomplete off so
+              browser/password-manager login heuristics (triggered by the
+              API-key password field elsewhere on the page) never pair this
+              input as a "username" and fill an email into it. */}
           <Input
+            id="explorer-path-filter"
+            name="devask-path-filter"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search files..."
-            className="h-8 pl-8 text-xs bg-card"
+            placeholder="Filter paths…"
+            aria-label="Filter files by path"
+            autoComplete="off"
+            spellCheck={false}
+            data-1p-ignore
+            data-lpignore="true"
+            className="h-8 bg-card pr-2 pl-8 font-mono text-xs"
           />
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto px-2 py-3">
-        <ul className="space-y-1">
-          {Object.values(treeRoot.children)
-            .sort((a, b) => {
-              // Folders first, then alphabetically
-              if (a.isFolder && !b.isFolder) return -1;
-              if (!a.isFolder && b.isFolder) return 1;
-              return a.name.localeCompare(b.name);
-            })
-            .map((node) => (
-              <FileTreeNode key={node.path} node={node} onFileClick={onFileClick} />
-            ))}
-        </ul>
+      <div
+        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain p-1.5 [scrollbar-gutter:stable]"
+        role="tree"
+        aria-label="Repository files"
+      >
+        {filteredFiles.length === 0 ? (
+          searching ? (
+            <div className="px-2.5 py-4">
+              <p className="text-xs font-medium text-foreground/90">No files found</p>
+              <p className="mt-3 font-mono text-[11px] text-muted-foreground">Try:</p>
+              <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
+                <li aria-hidden>• checking the filename</li>
+                <li aria-hidden>• searching by folder</li>
+                <li aria-hidden>• using a broader term</li>
+              </ul>
+              <span className="sr-only">
+                Checking the filename, searching by folder, or using a broader term.
+              </span>
+            </div>
+          ) : (
+            <p className="px-2.5 py-4 text-xs text-muted-foreground">No files indexed yet.</p>
+          )
+        ) : (
+          <ul className="space-y-px">
+            {Object.values(treeRoot.children)
+              .sort(sortNodes)
+              .map((node) => (
+                <FileTreeNode
+                  key={node.path}
+                  node={node}
+                  onFileClick={onFileClick}
+                  selectedPath={selectedPath}
+                  forceOpen={searching}
+                />
+              ))}
+          </ul>
+        )}
       </div>
     </div>
   );
@@ -103,15 +154,23 @@ export function FileExplorer({ files, onFileClick }: FileExplorerProps) {
 function FileTreeNode({
   node,
   onFileClick,
+  selectedPath,
+  forceOpen,
   level = 0,
 }: {
   node: FileNode;
   onFileClick: (path: string) => void;
+  selectedPath?: string | null;
+  forceOpen?: boolean;
   level?: number;
 }) {
-  const [isOpen, setIsOpen] = useState(true);
+  // Top-level folders start open; deeper levels start collapsed so large
+  // trees stay scannable. Searching force-opens everything.
+  const [isOpen, setIsOpen] = useState(level < 1);
+  const open = forceOpen || isOpen;
 
   const hasChildren = Object.keys(node.children).length > 0;
+  const selected = !node.isFolder && selectedPath === node.path;
 
   const handleNodeClick = () => {
     if (node.isFolder) {
@@ -121,55 +180,59 @@ function FileTreeNode({
     }
   };
 
-  const extension = node.name.split('.').pop() || '';
-  const getFileIcon = () => {
-    if (node.isFolder) {
-      return isOpen ? (
-        <FolderOpen className="w-4 h-4 text-primary flex-shrink-0" />
-      ) : (
-        <Folder className="w-4 h-4 text-primary flex-shrink-0" />
-      );
-    }
-
-    if (['ts', 'tsx', 'js', 'jsx', 'json', 'py', 'rs', 'go', 'java', 'html', 'css'].includes(extension)) {
-      return <FileCode className="w-4 h-4 text-emerald-400 flex-shrink-0" />;
-    }
-
-    return <File className="w-4 h-4 text-muted-foreground flex-shrink-0" />;
-  };
+  const extension = node.name.includes('.') ? (node.name.split('.').pop() ?? '') : '';
 
   return (
-    <li>
+    <li role="treeitem" aria-expanded={node.isFolder ? open : undefined} aria-selected={selected || undefined}>
       <button
+        type="button"
         onClick={handleNodeClick}
-        style={{ paddingLeft: `${level * 12 + 6}px` }}
+        style={{ paddingLeft: `${level * 14 + 6}px` }}
+        title={node.path}
         className={cn(
-          "flex items-center gap-2 w-full py-1 rounded text-left text-xs hover:bg-muted font-mono transition-colors cursor-pointer",
-          !node.isFolder && "text-muted-foreground hover:text-foreground"
+          'flex w-full items-center gap-1.5 rounded-[4px] py-[5px] pr-2 text-left font-mono text-xs transition-colors',
+          selected
+            ? 'bg-accent text-foreground'
+            : node.isFolder
+              ? 'text-foreground/80 hover:bg-accent/60 hover:text-foreground'
+              : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
         )}
       >
         {node.isFolder ? (
-          isOpen ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+          <ChevronRight
+            className={cn(
+              'h-3 w-3 flex-shrink-0 text-muted-foreground/70 transition-transform',
+              open && 'rotate-90'
+            )}
+          />
         ) : (
-          <span className="w-3.5" />
+          <span className="w-3 flex-shrink-0" />
         )}
-        {getFileIcon()}
+        {node.isFolder ? (
+          open ? (
+            <FolderOpen className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+          ) : (
+            <Folder className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+          )
+        ) : CODE_EXTENSIONS.has(extension.toLowerCase()) ? (
+          <FileCode2 className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+        ) : (
+          <File className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/60" />
+        )}
         <span className="truncate">{node.name}</span>
       </button>
 
-      {node.isFolder && isOpen && hasChildren && (
-        <ul className="mt-0.5 space-y-0.5">
+      {node.isFolder && open && hasChildren && (
+        <ul className="mt-px space-y-px">
           {Object.values(node.children)
-            .sort((a, b) => {
-              if (a.isFolder && !b.isFolder) return -1;
-              if (!a.isFolder && b.isFolder) return 1;
-              return a.name.localeCompare(b.name);
-            })
+            .sort(sortNodes)
             .map((child) => (
               <FileTreeNode
                 key={child.path}
                 node={child}
                 onFileClick={onFileClick}
+                selectedPath={selectedPath}
+                forceOpen={forceOpen}
                 level={level + 1}
               />
             ))}

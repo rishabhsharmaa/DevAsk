@@ -1,16 +1,28 @@
 'use client';
 
 import React, { useRef, useEffect, useState } from 'react';
-import { SendHorizontal } from 'lucide-react';
+import { ArrowUp, KeyRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+import { MODEL_DISPLAY_NAMES } from '@/components/provider-selector';
+import type { LLMProvider } from '@/types';
 
 interface ChatInputProps {
   onSubmit: (message: string) => void;
   isLoading: boolean;
   disabled?: boolean;
+  provider: LLMProvider;
+  hasKey: boolean;
+  onConnectKey: () => void;
 }
 
-export function ChatInput({ onSubmit, isLoading, disabled }: ChatInputProps) {
+const PROVIDER_LABEL: Record<LLMProvider, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  gemini: 'Gemini',
+};
+
+export function ChatInput({ onSubmit, isLoading, disabled, provider, hasKey, onConnectKey }: ChatInputProps) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -37,7 +49,7 @@ export function ChatInput({ onSubmit, isLoading, disabled }: ChatInputProps) {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Cmd+Enter or Ctrl+Enter or pure Enter (without shift) to submit
+    // Enter (without shift) to submit
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
@@ -45,30 +57,57 @@ export function ChatInput({ onSubmit, isLoading, disabled }: ChatInputProps) {
   };
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="relative flex items-end gap-2 rounded-xl border border-input bg-card p-2 shadow-sm focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20 transition-all glow-violet-sm"
-    >
-      <textarea
-        ref={textareaRef}
-        rows={1}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder="Ask anything about the codebase... (Enter to send, Shift+Enter for newline)"
-        disabled={isLoading || disabled}
-        className="flex-1 max-h-[200px] min-h-[38px] resize-none bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/80 disabled:opacity-50"
-      />
-      <Button
-        type="submit"
-        size="icon"
-        variant="default"
-        disabled={!value.trim() || isLoading || disabled}
-        className="h-9 w-9 rounded-lg flex items-center justify-center bg-primary text-primary-foreground hover:bg-primary/80 transition-colors"
-      >
-        <SendHorizontal className="h-4.5 w-4.5" />
-      </Button>
-    </form>
+    <div className="border border-border bg-card transition-colors focus-within:border-signal/50">
+      {!hasKey ? (
+        <button
+          type="button"
+          onClick={onConnectKey}
+          className="flex w-full items-center gap-2.5 px-3.5 py-3 text-left transition-colors hover:bg-accent/60"
+        >
+          <KeyRound className="h-4 w-4 flex-shrink-0 text-signal" />
+          <span className="text-[13.5px]">
+            <span className="font-medium">Connect your {PROVIDER_LABEL[provider]} API key to ask.</span>{' '}
+            <span className="text-muted-foreground">Used for this request only — never stored.</span>
+          </span>
+        </button>
+      ) : (
+        <form onSubmit={handleSubmit}>
+          <label htmlFor="chat-input" className="sr-only">
+            Ask a question about the codebase
+          </label>
+          <textarea
+            id="chat-input"
+            ref={textareaRef}
+            rows={1}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask about architecture, trace a flow, find an implementation…"
+            disabled={isLoading || disabled}
+            className="max-h-[200px] min-h-[46px] w-full resize-none bg-transparent px-3.5 pt-3 text-[14px] leading-relaxed outline-none placeholder:text-muted-foreground/70 disabled:opacity-50"
+          />
+          <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5">
+            <p className="truncate px-1 font-mono text-[11px] text-muted-foreground">
+              {MODEL_DISPLAY_NAMES[provider]}
+            </p>
+            <div className="flex items-center gap-2">
+              <span className="hidden font-mono text-[11px] text-muted-foreground/70 sm:inline">
+                enter to send · shift+enter for newline
+              </span>
+              <Button
+                type="submit"
+                size="icon-sm"
+                disabled={!value.trim() || isLoading || disabled}
+                aria-label="Send message"
+                className={cn(!value.trim() && 'opacity-40')}
+              >
+                <ArrowUp className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </form>
+      )}
+    </div>
   );
 }
 export default ChatInput;

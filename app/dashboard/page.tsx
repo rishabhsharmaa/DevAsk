@@ -1,18 +1,31 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useUser, useAuth } from '@clerk/nextjs';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Github, FolderPlus, CreditCard, Sparkles, AlertTriangle, ShieldCheck, Check } from 'lucide-react';
+import {
+  Plus,
+  Github,
+  ArrowUpRight,
+  ArrowRight,
+  FolderGit2,
+  RefreshCw,
+  Trash2,
+  MessageSquareText,
+  CheckCircle2,
+} from 'lucide-react';
 import { supabase, setBrowserTokenGetter } from '@/lib/supabase/client';
-import { RepoCard } from '@/components/repo-card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from '@/components/ui/dialog';
+import { StatusBadge } from '@/components/status';
+import { EmptyState, InlineError, FieldError } from '@/components/state';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 import type { Repo, Plan, CheckoutResponse } from '@/types';
+import { PLAN_LIMITS } from '@/types';
 
 // Razorpay popup checkout (loaded via script tag at runtime)
 interface RazorpayCheckoutResponse {
@@ -42,6 +55,23 @@ declare global {
   }
 }
 
+const GITHUB_URL_RE =
+  /^https?:\/\/(www\.)?github\.com\/([^/\s]+)\/([^/\s#?]+)(\/)?(\?.*)?$/;
+
+function parseGitHubUrl(url: string): { owner: string; name: string } | null {
+  const match = url.trim().match(GITHUB_URL_RE);
+  if (!match) return null;
+  const name = match[3].replace(/\.git$/, '');
+  if (!match[2] || !name) return null;
+  return { owner: match[2], name };
+}
+
+function shortDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const { user } = useUser();
@@ -56,7 +86,13 @@ export default function DashboardPage() {
   // Dialog state
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [repoUrl, setRepoUrl] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
+  const [urlError, setUrlError] = useState('');
+  const [repoToDelete, setRepoToDelete] = useState<Repo | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Inline (non-blocking) notices — no alert()/confirm() anywhere.
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [upgradeNotice, setUpgradeNotice] = useState<{ kind: 'error' | 'success'; text: string } | null>(null);
 
   // Payment upgrade state
   const [isUpgrading, setIsUpgrading] = useState(false);
@@ -79,7 +115,7 @@ export default function DashboardPage() {
   const plan = (userRow?.plan || 'free') as Plan;
 
   // React Query: Fetch indexed repositories
-  const { data: repos, isLoading: isReposLoading, error: reposError } = useQuery<Repo[]>({
+  const { data: repos, isLoading: isReposLoading, error: reposError, refetch: refetchRepos } = useQuery<Repo[]>({
     queryKey: ['repos', user?.id],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -92,6 +128,11 @@ export default function DashboardPage() {
     },
     enabled: !!user?.id,
   });
+
+  const repoCount = repos?.length ?? 0;
+  const maxRepos = PLAN_LIMITS[plan].max_repos;
+  const atLimit = Number.isFinite(maxRepos) && repoCount >= maxRepos;
+  const parsedPreview = parseGitHubUrl(repoUrl);
 
   // Mutator: Index a new repository
   const addRepoMutation = useMutation({
@@ -112,23 +153,31 @@ export default function DashboardPage() {
       queryClient.invalidateQueries({ queryKey: ['repos'] });
       setIsAddOpen(false);
       setRepoUrl('');
-      setErrorMsg('');
+      setUrlError('');
       router.push(`/repo/${data.repo_id}`);
     },
     onError: (err) => {
-      setErrorMsg(err.message || 'Verification failed. Make sure the URL exists.');
+      setUrlError(err.message || 'Verification failed. Make sure the URL exists and is accessible.');
     },
   });
 
   // Action: Add new repo submit handler
   const handleAddRepo = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!repoUrl.trim()) return;
-    addRepoMutation.mutate(repoUrl.trim());
+    const trimmed = repoUrl.trim();
+    if (!trimmed || addRepoMutation.isPending) return;
+    if (!parseGitHubUrl(trimmed)) {
+      setUrlError('Enter a valid GitHub repository URL, e.g. https://github.com/owner/repo');
+      return;
+    }
+    setUrlError('');
+    setActionError(null);
+    addRepoMutation.mutate(trimmed);
   };
 
   // Action: Trigger re-index
   const handleReindex = async (repo: Repo) => {
+    setActionError(null);
     try {
       const res = await fetch('/api/repo/index', {
         method: 'POST',
@@ -141,33 +190,36 @@ export default function DashboardPage() {
 
       queryClient.invalidateQueries({ queryKey: ['repos'] });
     } catch (err) {
-      alert(`Reindexing failed: ${err instanceof Error ? err.message : String(err)}`);
+      setActionError(`Reindexing failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
   // Action: Delete repo from DB (cascade deletes chunks and history)
-  const handleDelete = async (repoId: string) => {
-    if (!confirm('Are you sure you want to delete this repository and its conversation history? This cannot be undone.')) {
-      return;
-    }
-
+  const handleDeleteConfirm = async () => {
+    if (!repoToDelete) return;
+    setIsDeleting(true);
+    setActionError(null);
     try {
       const { error } = await supabase
         .from('repos')
         .delete()
-        .eq('id', repoId);
+        .eq('id', repoToDelete.id);
 
       if (error) throw error;
 
+      setRepoToDelete(null);
       queryClient.invalidateQueries({ queryKey: ['repos'] });
     } catch (err) {
-      alert(`Failed to delete repo: ${err instanceof Error ? err.message : String(err)}`);
+      setActionError(`Failed to delete repository: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
   // Action: Open hosted Stripe page or load Razorpay script
   const handleUpgrade = async () => {
     setIsUpgrading(true);
+    setUpgradeNotice(null);
     try {
       const res = await fetch('/api/payments/checkout', {
         method: 'POST',
@@ -217,13 +269,13 @@ export default function DashboardPage() {
 
             if (verifyRes.ok) {
               refetchUser();
-              alert('Successfully upgraded to Pro! Welcome aboard.');
+              setUpgradeNotice({ kind: 'success', text: 'Upgraded to Pro. Unlimited repositories and private repos are now unlocked.' });
             } else {
-              alert('Signature verification failed. Please contact support.');
+              setUpgradeNotice({ kind: 'error', text: 'Payment signature verification failed. Please contact support.' });
             }
           },
           theme: {
-            color: '#7C3AED',
+            color: '#B98A2F',
           },
         };
 
@@ -231,168 +283,369 @@ export default function DashboardPage() {
         rzp.open();
       }
     } catch (err) {
-      alert(`Checkout failed: ${err instanceof Error ? err.message : String(err)}`);
+      setUpgradeNotice({ kind: 'error', text: `Checkout failed: ${err instanceof Error ? err.message : String(err)}` });
     } finally {
       setIsUpgrading(false);
     }
   };
 
   return (
-    <div className="space-y-8 max-w-6xl mx-auto">
-      {/* Welcome Banner */}
-      <section className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 p-6 rounded-xl border border-border bg-card/45 backdrop-blur-sm shadow-sm">
-        <div className="space-y-1">
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            Hey, {user?.firstName || 'Developer'}! <Sparkles className="w-5 h-5 text-primary" />
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Index repositories to get immediate answers, documentation, and citations.
+    <div className="space-y-6">
+      {/* Workspace header: what exists, what it costs, what to do next */}
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Repositories</h1>
+          <p className="mt-1 font-mono text-xs text-muted-foreground">
+            {isReposLoading ? (
+              'loading workspace…'
+            ) : (
+              <>
+                {repoCount} {repoCount === 1 ? 'repository' : 'repositories'}
+                {' · '}
+                <span className="capitalize">{plan} plan</span>
+                {Number.isFinite(maxRepos) && (
+                  <>
+                    {' · '}
+                    <span className={cn(atLimit && 'text-signal')}>
+                      {repoCount}/{maxRepos} used
+                    </span>
+                  </>
+                )}
+              </>
+            )}
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <Badge variant="outline" className="px-3 py-1 bg-background capitalize">
-            Plan: {plan}
-          </Badge>
+        <div className="flex items-center gap-2">
           {plan === 'free' && (
             <Button
+              variant="outline"
+              size="sm"
               onClick={handleUpgrade}
               disabled={isUpgrading}
-              size="sm"
-              className="bg-primary hover:bg-primary/80 text-primary-foreground flex items-center gap-1.5 shadow-sm glow-violet-sm"
+              className="gap-1.5"
             >
-              <CreditCard className="w-4 h-4" />
-              {isUpgrading ? 'Loading checkout...' : 'Upgrade to Pro'}
+              <ArrowUpRight className="h-3.5 w-3.5" />
+              {isUpgrading ? 'Opening checkout…' : 'Upgrade to Pro'}
             </Button>
           )}
+          <Button size="sm" onClick={() => setIsAddOpen(true)} className="gap-1.5 font-semibold">
+            <Plus className="h-4 w-4" />
+            Add repository
+          </Button>
         </div>
-      </section>
+      </div>
 
-      {/* Query failure banner (e.g. Supabase auth misconfigured) */}
-      {reposError && (
+      {/* Upgrade / plan notices */}
+      {upgradeNotice?.kind === 'error' && (
+        <InlineError title="Upgrade didn't complete" body={upgradeNotice.text} />
+      )}
+      {upgradeNotice?.kind === 'success' && (
         <div
-          role="alert"
-          className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          role="status"
+          className="flex items-start gap-3 border border-success/25 bg-success/[7%] px-4 py-3"
         >
-          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-          <span>
-            Failed to load repositories: {(reposError as Error).message}. If this
-            persists, check that Supabase trusts your Clerk JWTs (Authentication → Third-Party Auth).
-          </span>
+          <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-success" />
+          <p className="text-sm">{upgradeNotice.text}</p>
+        </div>
+      )}
+      {actionError && (
+        <InlineError title="Something went wrong" body={actionError} />
+      )}
+
+      {plan === 'free' && !isReposLoading && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border border-border bg-card px-4 py-3">
+          <p className="text-[13.5px] leading-relaxed text-muted-foreground">
+            {atLimit ? (
+              <>
+                <span className="font-medium text-foreground">Repository limit reached.</span>{' '}
+                Pro unlocks unlimited repositories, private repos, and every provider.
+              </>
+            ) : (
+              <>
+                <span className="font-medium text-foreground">Free plan</span> —{' '}
+                {Number.isFinite(maxRepos) ? `${maxRepos - repoCount} of ${maxRepos} slots left` : 'limited scope'}
+                . Pro adds unlimited + private repos, all providers, and persistent history.
+              </>
+            )}
+          </p>
+          <Button variant="ghost" size="sm" onClick={handleUpgrade} disabled={isUpgrading} className="gap-1">
+            {isUpgrading ? 'Opening checkout…' : 'Compare and upgrade'}
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Button>
         </div>
       )}
 
-      {/* Main Action Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-bold">Indexed Repositories</h3>
-          <p className="text-xs text-muted-foreground">
-            Select an indexed repository to initiate codebase chat.
-          </p>
-        </div>
+      {/* Query failure banner (e.g. Supabase auth misconfigured) */}
+      {reposError && (
+        <InlineError
+          title="Couldn't load repositories"
+          body={`${(reposError as Error).message} — if this persists, check that Supabase trusts your Clerk JWTs (Authentication → Third-Party Auth).`}
+          action={{ label: 'Try again', onClick: () => refetchRepos() }}
+        />
+      )}
 
-        {/* Add Repo Dialog */}
-        <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-          <DialogTrigger asChild>
-            <Button className="bg-primary hover:bg-primary/80 text-primary-foreground flex items-center gap-1.5 shadow-sm">
-              <Plus className="w-4 h-4" /> Add Repository
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-md bg-card border border-border">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <FolderPlus className="w-5 h-5 text-primary" /> Index Repository
-              </DialogTitle>
-              <DialogDescription className="text-xs">
-                Paste a public or private GitHub repository URL. Private repositories require you to have linked your GitHub account via Clerk.
-              </DialogDescription>
-            </DialogHeader>
-
-            <form onSubmit={handleAddRepo} className="space-y-4 mt-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="repo-url-input">GitHub Repository URL</Label>
-                <div className="relative">
-                  <Github className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input
-                    id="repo-url-input"
-                    value={repoUrl}
-                    onChange={(e) => setRepoUrl(e.target.value)}
-                    placeholder="https://github.com/owner/repository"
-                    disabled={addRepoMutation.isPending}
-                    className="pl-9 bg-background h-10"
-                  />
-                </div>
-                {errorMsg && (
-                  <p className="text-xs text-destructive flex items-center gap-1 mt-1">
-                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                    {errorMsg}
-                  </p>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2 text-[10px] text-emerald-400 font-medium bg-emerald-500/10 px-2.5 py-1.5 rounded-lg border border-emerald-500/10">
-                <ShieldCheck className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                <span>RAG analysis may take up to a minute depending on repo size.</span>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => setIsAddOpen(false)}
-                  disabled={addRepoMutation.isPending}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={!repoUrl.trim() || addRepoMutation.isPending}
-                  className="bg-primary hover:bg-primary/80"
-                >
-                  {addRepoMutation.isPending ? 'Indexing...' : 'Index Codebase'}
-                </Button>
-              </div>
-            </form>
-          </DialogContent>
-        </Dialog>
-      </div>
-
-      {/* Grid List of Repos */}
+      {/* Repository ledger */}
       {isReposLoading ? (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-44 rounded-xl border border-border bg-card/45 animate-pulse" />
+        <div className="border border-border" aria-label="Loading repositories">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className={cn('animate-pulse px-4 py-4', i > 0 && 'border-t border-border')}>
+              <div className="flex items-center gap-3">
+                <div className="h-4 w-40 bg-muted" />
+                <div className="h-4 w-14 bg-muted" />
+              </div>
+              <div className="mt-2.5 flex items-center gap-3">
+                <div className="h-3 w-24 bg-muted/70" />
+                <div className="h-3 w-16 bg-muted/70" />
+                <div className="h-3 w-20 bg-muted/70" />
+              </div>
+            </div>
           ))}
         </div>
       ) : repos && repos.length > 0 ? (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {repos.map((repo) => (
-            <RepoCard
+        <div className="border border-border">
+          <div className="hidden grid-cols-[minmax(0,1fr)_110px_90px_64px_112px_156px] items-center gap-4 border-b border-border bg-card px-4 py-2 font-mono text-[11px] tracking-wide text-muted-foreground uppercase lg:grid">
+            <span>Repository</span>
+            <span>Status</span>
+            <span>Language</span>
+            <span className="text-right tabular">Files</span>
+            <span className="text-right tabular">Indexed</span>
+            <span className="text-right">Actions</span>
+          </div>
+          {repos.map((repo, i) => (
+            <RepoRow
               key={repo.id}
               repo={repo}
+              bordered={i > 0}
               onReindex={() => handleReindex(repo)}
-              onDelete={() => handleDelete(repo.id)}
+              onDelete={() => setRepoToDelete(repo)}
             />
           ))}
         </div>
       ) : (
-        /* Empty State */
-        <div className="flex flex-col items-center justify-center p-12 text-center rounded-xl border border-dashed border-border bg-card/20 max-w-xl mx-auto">
-          <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-            <Github className="w-6 h-6 text-primary" />
-          </div>
-          <h4 className="text-base font-bold mb-1">No repositories indexed yet</h4>
-          <p className="text-xs text-muted-foreground max-w-xs mb-6">
-            Paste a public or private GitHub repository URL to initiate semantic search analysis.
-          </p>
-          <Button
-            onClick={() => setIsAddOpen(true)}
-            className="bg-primary hover:bg-primary/80 text-primary-foreground flex items-center gap-1.5 shadow-sm"
-          >
-            <Plus className="w-4 h-4" /> Index First Repository
-          </Button>
-        </div>
+        !reposError && (
+          <EmptyState
+            icon={<FolderGit2 className="h-4 w-4" />}
+            title="No codebase connected yet"
+            body="Connect a GitHub repository to start asking questions about its architecture, implementation, and dependencies."
+            primary={{ label: 'Add repository', onClick: () => setIsAddOpen(true) }}
+            secondary={{ label: 'See how it works', href: '/#product' }}
+          />
+        )
       )}
+
+      {/* Add repository dialog */}
+      <Dialog
+        open={isAddOpen}
+        onOpenChange={(open) => {
+          setIsAddOpen(open);
+          if (!open) {
+            setUrlError('');
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Index a repository</DialogTitle>
+            <DialogDescription>
+              Paste a GitHub URL. DevAsk crawls the full tree and builds a
+              searchable index — usually within a minute.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleAddRepo} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="repo-url-input">GitHub repository URL</Label>
+              <div className="relative">
+                <Github className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="repo-url-input"
+                  value={repoUrl}
+                  onChange={(e) => {
+                    setRepoUrl(e.target.value);
+                    if (urlError) setUrlError('');
+                  }}
+                  placeholder="https://github.com/owner/repository"
+                  disabled={addRepoMutation.isPending}
+                  className="h-10 pr-3 pl-9 font-mono text-[13px]"
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-invalid={urlError ? true : undefined}
+                  aria-describedby={urlError ? 'repo-url-error' : undefined}
+                />
+              </div>
+              {parsedPreview && !urlError && (
+                <p className="font-mono text-xs text-muted-foreground" aria-live="polite">
+                  will index <span className="text-foreground">{parsedPreview.owner}/{parsedPreview.name}</span>
+                </p>
+              )}
+              <div id="repo-url-error">{urlError && <FieldError message={urlError} />}</div>
+            </div>
+
+            {plan === 'free' ? (
+              <p className="text-[13px] leading-relaxed text-muted-foreground">
+                Free plan covers public repositories. Private repos need Pro
+                plus a linked GitHub account.
+              </p>
+            ) : (
+              <p className="text-[13px] leading-relaxed text-muted-foreground">
+                Private repositories work if your GitHub account is linked via Clerk.
+              </p>
+            )}
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setIsAddOpen(false)}
+                disabled={addRepoMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={!repoUrl.trim() || addRepoMutation.isPending}
+              >
+                {addRepoMutation.isPending ? 'Starting index…' : 'Index codebase'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <Dialog open={repoToDelete !== null} onOpenChange={(open) => !open && !isDeleting && setRepoToDelete(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete this repository?</DialogTitle>
+            <DialogDescription>
+              {repoToDelete && (
+                <>
+                  <span className="font-mono text-[13px] text-foreground">
+                    {repoToDelete.owner}/{repoToDelete.name}
+                  </span>{' '}
+                  and its index plus conversation history will be permanently removed.
+                  This cannot be undone.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setRepoToDelete(null)} disabled={isDeleting}>
+              Keep it
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteConfirm} disabled={isDeleting}>
+              {isDeleting ? 'Deleting…' : 'Delete repository'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function RepoRow({
+  repo,
+  bordered,
+  onReindex,
+  onDelete,
+}: {
+  repo: Repo;
+  bordered: boolean;
+  onReindex: () => void;
+  onDelete: () => void;
+}) {
+  const isReady = repo.index_status === 'ready';
+  const isIndexing = repo.index_status === 'indexing' || repo.index_status === 'pending';
+
+  return (
+    <div
+      className={cn(
+        'grid gap-2 px-4 py-3.5 transition-colors hover:bg-card/60 lg:grid-cols-[minmax(0,1fr)_110px_90px_64px_112px_156px] lg:items-center lg:gap-4',
+        bordered && 'border-t border-border'
+      )}
+    >
+      {/* Repository identity */}
+      <div className="min-w-0">
+        {isReady ? (
+          <Link
+            href={`/repo/${repo.id}`}
+            className="truncate font-mono text-[13.5px] font-medium hover:underline hover:decoration-signal hover:underline-offset-4"
+          >
+            {repo.owner}/{repo.name}
+          </Link>
+        ) : (
+          <p className="truncate font-mono text-[13.5px] font-medium text-muted-foreground">
+            {repo.owner}/{repo.name}
+          </p>
+        )}
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">
+          {repo.metadata?.summary ?? (isIndexing ? 'Indexing in progress…' : 'No summary yet.')}
+        </p>
+      </div>
+
+      {/* Status */}
+      <div className="max-lg:mt-1">
+        <StatusBadge status={repo.index_status} />
+      </div>
+
+      {/* Language */}
+      <div className="font-mono text-xs text-muted-foreground max-lg:hidden">
+        {repo.language ?? '—'}
+      </div>
+
+      {/* Counts */}
+      <div className="font-mono text-xs text-muted-foreground tabular max-lg:hidden lg:text-right">
+        {repo.metadata?.file_count != null ? repo.metadata.file_count.toLocaleString() : '—'}
+      </div>
+      <div className="font-mono text-xs whitespace-nowrap text-muted-foreground tabular max-lg:hidden lg:text-right">
+        {shortDate(repo.created_at)}
+      </div>
+
+      {/* Compact meta for small screens */}
+      <p className="font-mono text-[11.5px] text-muted-foreground lg:hidden">
+        {[repo.language, repo.metadata?.file_count != null ? `${repo.metadata.file_count} files` : null, shortDate(repo.created_at)]
+          .filter(Boolean)
+          .join(' · ')}
+      </p>
+
+      {/* Actions */}
+      <div className="flex items-center gap-1.5 max-lg:mt-1 lg:justify-end">
+        {isReady ? (
+          <Button size="sm" asChild className="gap-1.5 font-semibold">
+            <Link href={`/repo/${repo.id}`}>
+              <MessageSquareText className="h-3.5 w-3.5" />
+              Open
+            </Link>
+          </Button>
+        ) : (
+          <Button size="sm" variant="outline" asChild className="gap-1.5">
+            <Link href={`/repo/${repo.id}`}>
+              {isIndexing ? 'Status' : 'Details'}
+            </Link>
+          </Button>
+        )}
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          onClick={onReindex}
+          disabled={isIndexing}
+          title="Re-index repository"
+          aria-label={`Re-index ${repo.owner}/${repo.name}`}
+        >
+          <RefreshCw className={cn('h-3.5 w-3.5', isIndexing && 'animate-spin')} />
+        </Button>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          onClick={onDelete}
+          title="Delete repository"
+          aria-label={`Delete ${repo.owner}/${repo.name}`}
+          className="hover:text-destructive"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </div>
     </div>
   );
 }

@@ -11,7 +11,7 @@ No IDE. No setup. Just a URL — with source-file citations on every answer.
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![Supabase](https://img.shields.io/badge/Supabase-pgvector-3ECF8E?logo=supabase&logoColor=black)
 ![Clerk](https://img.shields.io/badge/Auth-Clerk-6C47FF?logo=clerk&logoColor=white)
-![Voyage AI](https://img.shields.io/badge/Embeddings-Voyage--code--4-orange)
+![Gemini](https://img.shields.io/badge/Embeddings-gemini--embedding--2-4285F4?logo=google&logoColor=white)
 
 [Features](#-features) · [Architecture](#-architecture) · [How it works](#-how-it-works) · [Getting started](#-getting-started) · [API reference](#-api-reference) · [Troubleshooting](#-troubleshooting)
 
@@ -58,7 +58,7 @@ Pasting a repo URL into a general LLM gets you a README summary and guesses. Dev
 
 ## ✨ Features
 
-- **Full RAG indexing** — every file chunked, embedded (Voyage `voyage-code-4`), stored in pgvector.
+- **Full RAG indexing** — every file chunked, embedded via the Gemini API, stored in pgvector.
 - **Streaming chat** — token-by-token responses via the Vercel AI SDK.
 - **Source citations** — each answer lists files used as context, with match % and snippet viewer.
 - **Codebase file explorer** — searchable tree; click any file to view its indexed contents.
@@ -77,7 +77,7 @@ flowchart TB
     Next -->|"anon key + Clerk JWT"| SB[("Supabase\nPostgres + pgvector")]
     Next -->|"service_role (server only)"| SB
     Next -->|"Octokit + GITHUB_TOKEN"| GH["GitHub API\n(tree + contents)"]
-    Next -->|"VOYAGE_API_KEY"| Voyage["Voyage AI\nvoyage-code-4 embeddings"]
+    Next -->|"REST (platform key)"| GemEmbed["Gemini embeddings\ngemini-embedding-2 (768d)"]
     Next -->|"user BYOK per request"| LLM["LLM providers\nOpenAI · Anthropic · Gemini"]
     Next -->|"ipapi.co country detect"| Pay["Stripe (global)\nRazorpay (India)"]
     Pay -->|"webhooks"| Next
@@ -91,7 +91,7 @@ flowchart TB
 | Route guard | `proxy.ts` | Clerk protection (Next.js 16 file convention — `middleware.ts` is deprecated) |
 | API routes | `app/api/` | `chat`, `repo/index`, `repo/status`, `payments/*` — all server-side, Clerk-authenticated |
 | GitHub ingest | `lib/github/client.ts` | Tree crawl + content fetch, exclusion filters, token handling |
-| RAG | `lib/rag/` | `chunker` (split) → `embedder` (Voyage) → `retriever` (pgvector search + prompt build) |
+| RAG | `lib/rag/` | `chunker` (split) → `embedder` (Gemini default, Voyage opt-in) → `retriever` (pgvector search + prompt build) |
 | LLM router | `lib/llm/` | One `streamChat()` over OpenAI / Anthropic / Gemini adapters (BYOK) |
 | Payments | `lib/payments/` | Geo-routing + Stripe/Razorpay adapters + webhook verification |
 | Database | `lib/supabase/` | Browser client (RLS-bound), service client (server-only), schema + migrations |
@@ -108,7 +108,7 @@ sequenceDiagram
     participant UI as Dashboard (client)
     participant API as POST /api/repo/index
     participant GH as GitHub API
-    participant VY as Voyage AI
+    participant GE as Gemini embeddings
     participant DB as Supabase
 
     D->>UI: Paste repo URL, click 'Index'
@@ -120,8 +120,8 @@ sequenceDiagram
     API->>DB: status → indexing
     API->>GH: getTree (recursive) → filter binaries/lockfiles/build dirs/≤1MB
     API->>GH: getContent per file (concurrency 5)
-    API->>API: chunk files (~2000 chars, 200 overlap, natural breaks)
-    API->>VY: embed batches (~12k chars/req, 20s pacing, 429 retry)
+    API->>API: chunk files (~1500 chars, 200 overlap, natural breaks)
+    API->>GE: embed batches (char-capped, 4s API pacing)
     API->>DB: batch-insert chunks + embeddings (100/req)
     API->>DB: status → ready (+ file/chunk counts, language)
     UI->>API: poll GET /api/repo/status every 3s → chat UI when ready
@@ -137,14 +137,14 @@ sequenceDiagram
     participant UI as Repo page (useChat)
     participant API as POST /api/chat
     participant DB as Supabase
-    participant VY as Voyage AI
+    participant GE as Gemini embeddings
     participant LLM as Chosen LLM (BYOK)
 
     D->>UI: Type question (+ BYOK key, provider)
     UI->>API: { messages[], repo_id, provider, api_key, conversation_id }
     API->>DB: verify plan allows provider + repo ownership
     API->>DB: create conversation if conversation_id is null
-    API->>VY: embed question (input_type: query)
+    API->>GE: embed question (same Gemini model)
     API->>DB: match_chunks RPC (cosine similarity, top 10, threshold 0.3)
     API->>DB: load last 5 messages (history)
     API->>DB: save user message
@@ -203,8 +203,8 @@ Routing is fully automatic — the user never picks a provider.
 | UI | React 19, Tailwind CSS v4, shadcn (radix-nova), Lucide | Dark mode default, Geist fonts |
 | Auth | Clerk `@clerk/nextjs` v7 | Prebuilt components + `auth()` + third-party JWT for Supabase |
 | Database | Supabase Postgres + pgvector | 5 tables, RLS everywhere, `match_chunks` RPC |
-| Embeddings | Voyage AI `voyage-code-4`, 1024 dims | Raw REST (no SDK dep), platform key, free tier friendly |
-| Chat LLM | Vercel AI SDK (`ai` + `@ai-sdk/*`) | BYOK: GPT-4o, Claude Sonnet 4, Gemini 2.5 Flash |
+| Embeddings | Gemini `gemini-embedding-2`, 768 dims (AI Studio REST) | Platform key, free-tier paced; Voyage API remains opt-in |
+| Chat LLM | Vercel AI SDK (`ai` + `@ai-sdk/*`) | BYOK: GPT-4o, Claude Sonnet 4.6, Gemini 3.8 Flash |
 | GitHub | Octokit | Token-authenticated crawl, 401/403/429 abort loudly |
 | State (client) | TanStack Query | Dashboard server-state; chat via `useChat` |
 | Payments | Stripe + Razorpay, ipapi.co geo-detect | Webhooks update plan + 32-day expiry |
@@ -241,8 +241,10 @@ DevAsk/
 ├── lib/
 │   ├── github/client.ts          # Octokit: parse URL, tree+content fetch, lang detect
 │   ├── rag/
-│   │   ├── chunker.ts            # ~2000-char chunks, 200 overlap, natural breaks
-│   │   ├── embedder.ts           # Voyage batch embed + 20s pacing + 429 retry
+│   │   ├── chunker.ts            # ~1500-char chunks, 200 overlap, natural breaks
+│   │   ├── embedder.ts           # Provider dispatch: gemini (default) vs voyage
+│   │   ├── gemini.ts             # AI Studio embeddings (paced, needs key)
+│   │   ├── voyage.ts             # Voyage API (opt-in, paced, needs key)
 │   │   └── retriever.ts          # match_chunks RPC + system-prompt builder
 │   ├── llm/
 │   │   ├── index.ts              # streamChat router + provider display names
@@ -253,7 +255,9 @@ DevAsk/
 │   │   ├── client.ts             # Browser singleton (RLS-bound, Clerk JWT injected)
 │   │   ├── service.ts            # Service-role client (SERVER ONLY, bypasses RLS)
 │   │   ├── schema.sql            # Full schema: tables, indexes, RLS, RPC
-│   │   └── migration-001-*.sql   # 1536/768 → 1024 vector migration
+│   │   ├── migration-001-*.sql   # 1536/768 → 1024 (Voyage era)
+│   │   ├── migration-002-*.sql   # 1024 → 384 (local bge-small era)
+│   │   └── migration-003-*.sql   # 384 → 768 (Gemini era)
 │   └── utils.ts                  # cn() (clsx + tailwind-merge)
 ├── types/index.ts                # Shared contract: entities, API shapes, plans, models
 ├── proxy.ts                      # Clerk route guard (protected vs public matchers)
@@ -272,7 +276,7 @@ Defined in [`lib/supabase/schema.sql`](lib/supabase/schema.sql) — run it once 
 |---|---|---|
 | `users` | Clerk-linked profile + subscription | `id` (Clerk ID), `plan`, `payment_provider`, Stripe/Razorpay IDs, `plan_expires_at` |
 | `repos` | Indexed repositories | `id` (uuid), `user_id`, `url/owner/name`, `index_status` (`pending\|indexing\|ready\|failed`), `metadata` (jsonb) |
-| `chunks` | RAG vector store | `repo_id` (cascade delete), `file_path`, `content`, `embedding vector(1024)` |
+| `chunks` | RAG vector store | `repo_id` (cascade delete), `file_path`, `content`, `embedding vector(768)` |
 | `conversations` | Chat sessions | `repo_id`, `user_id`, `is_public` (shareable links) |
 | `messages` | Chat history | `conversation_id` (cascade), `role`, `content`, `source_chunks` (jsonb) |
 
@@ -287,21 +291,23 @@ Defined in [`lib/supabase/schema.sql`](lib/supabase/schema.sql) — run it once 
 ### Prerequisites
 
 - **Node.js 20.9+** (v20.19+ verified; v22+ silences a transitive engine warning)
-- Accounts/keys: **Clerk**, **Supabase**, **Voyage AI** (free tier, no card), **GitHub** (PAT), optionally **Stripe**/**Razorpay**
+- Accounts/keys: **Clerk**, **Supabase**, **Google AI Studio** (free tier, no card — covers embeddings and Gemini chat), **GitHub** (PAT), optionally **Stripe**/**Razorpay**
 
 ### 1. Install
 
 ```bash
 git clone <repo-url> && cd DevAsk
 npm install
-cp .env.example .env.local   # then fill in the values below
+cp .env.example .env.local   # then fill in the values below (once only!)
 ```
+
+> ⚠️ Copy `.env.example` **once**. Re-running `cp` overwrites your filled-in `.env.local` with blanks — if your keys vanish, that's what happened.
 
 > If `npm ci` complains the lockfile is out of sync, use `npm install` (it re-syncs `package-lock.json`).
 
 ### 2. Environment variables
 
-All 13 live in [`.env.example`](.env.example) with comments:
+All 17 live in [`.env.example`](.env.example) with comments:
 
 | Variable | Where to get it | Used for |
 |---|---|---|
@@ -310,7 +316,11 @@ All 13 live in [`.env.example`](.env.example) with comments:
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Settings → API | Both clients |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase → Settings → API | Browser client (RLS-bound) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API | Server client (**secret**, bypasses RLS) |
-| `VOYAGE_API_KEY` | [Voyage dashboard](https://dashboard.voyageai.com) → API keys | Platform embeddings (free tier) |
+| `EMBEDDING_PROVIDER` | — | `gemini` (default, needs key below) or `voyage` (opt-in comparison) |
+| `RETRIEVAL_THRESHOLD` | — | Cosine cutoff (default 0.3) |
+| `GEMINI_EMBEDDING_API_KEY` | [Google AI Studio](https://aistudio.google.com) → Get API key | Required (default provider); can be the same key as Gemini chat |
+| `GEMINI_EMBEDDING_MODEL` | — | Optional override (default `gemini-embedding-2`); must accept 768-dim output |
+| `VOYAGE_API_KEY` | [Voyage dashboard](https://dashboard.voyageai.com) → API keys | Only when `EMBEDDING_PROVIDER=voyage`; never called in gemini mode |
 | `GITHUB_TOKEN` | GitHub → Settings → Personal access tokens (no scopes needed for public repos) | Indexing at 5,000 req/hr |
 | `STRIPE_SECRET_KEY` | Stripe dashboard | Non-India checkout |
 | `STRIPE_WEBHOOK_SECRET` | Stripe → Webhooks | Webhook verification |
@@ -320,8 +330,8 @@ All 13 live in [`.env.example`](.env.example) with comments:
 
 ### 3. Supabase setup (3 steps — all required)
 
-1. **Schema:** in Supabase → SQL Editor, run [`lib/supabase/schema.sql`](lib/supabase/schema.sql) once (creates tables, RLS, `match_chunks` RPC).
-   - Upgrading from an older checkout? Run [`lib/supabase/migration-001-voyage-1024.sql`](lib/supabase/migration-001-voyage-1024.sql) instead/after — it resizes `chunks.embedding` to `vector(1024)` (works from 1536 or 768) and replaces the RPC. Old vectors are deleted; repos must be re-indexed.
+1. **Schema:** in Supabase → SQL Editor, run [`lib/supabase/schema.sql`](lib/supabase/schema.sql) once (creates tables, RLS, `match_chunks` RPC — 768-dim for the default Gemini provider).
+   - Upgrading from an older checkout? Run [`lib/supabase/migration-003-gemini-768.sql`](lib/supabase/migration-003-gemini-768.sql) — it resizes `chunks.embedding` to `vector(768)`, replaces the RPC, deletes incompatible old vectors, and marks old repos as failed with a re-index note. Then delete + re-add each repo from the dashboard. (Migration-001/002 cover the earlier Voyage → local steps, kept for history.)
 2. **Clerk trust:** in Supabase → **Authentication → Third-Party Auth**, enable the **Clerk** provider and set your Clerk domain (e.g. `https://<instance>.clerk.accounts.dev`). Without this, every browser read is denied by RLS (dashboard looks empty, repo pages hang on loading).
 3. **pgvector:** enabled by the schema script (`create extension if not exists vector`) — no manual step.
 
@@ -389,18 +399,27 @@ All knobs are constants near the top of their files — no config service:
 
 | Knob | File | Default | Effect |
 |---|---|---|---|
-| Chunk size / overlap | `lib/rag/chunker.ts` | 2000 / 200 chars (~500/50 tokens) | Larger = more context per hit, fewer hits; overlap preserves boundary context |
-| Embedding batch / pacing | `lib/rag/embedder.ts` | ~12k chars/req, 20s apart | Sustains ≈9k TPM under the Voyage free tier (3 RPM / 10k TPM) — relax if you raise limits |
-| Retry | `lib/rag/embedder.ts` | 4 retries, honors `Retry-After` | Survives 429/5xx during bulk indexing |
-| Retrieval top-K / threshold | `lib/rag/retriever.ts` | 10 chunks, 0.3 cosine | Raise K for broad questions; raise threshold to cut noise |
+| Chunk size / overlap | `lib/rag/chunker.ts` | 1500 / 200 chars (~470/50 code-tokens) | Sized for retrieval granularity; overlap preserves boundary context |
+| Embedding batch | `lib/rag/gemini.ts` (`GEMINI_MAX_BATCH_CHARS` / `GEMINI_MAX_BATCH_COUNT`) | ~8K chars, ≤16 texts/batch | Sized for the AI Studio free tier (30K TPM) |
+| Retrieval top-K / threshold | `lib/rag/retriever.ts` (`RETRIEVAL_THRESHOLD`) | 10 chunks, 0.3 cosine | Threshold was Voyage-tuned — re-evaluate for Gemini; raise K for broad questions |
+| Gemini pacing | `lib/rag/gemini.ts` | 4s spacing, 8 retries, honors `Retry-After` | Default path; tune via `GEMINI_REQUEST_INTERVAL_MS` |
+| Voyage pacing (opt-in path) | `lib/rag/voyage.ts` | AIMD delay, 8 retries, honors `Retry-After` | Only when `EMBEDDING_PROVIDER=voyage` |
 | History window | `app/api/chat/route.ts` | Last 5 messages | More = better follow-ups, higher per-message cost |
 | GitHub fetch concurrency | `lib/github/client.ts` | 5 parallel | Higher = faster indexing, more rate-limit pressure |
 | Excluded paths | `lib/github/client.ts` | `node_modules`, `.git`, `dist`, `build`, binaries, lockfiles… | Extend to skip generated code |
 | Max file size | `lib/github/client.ts` | 1 MB | Larger files are skipped silently |
 | Plan limits | `types/index.ts` (`PLAN_LIMITS`) | Free: 2 repos, OpenAI only | Single source of truth, enforced in API routes |
-| Default models | `types/index.ts` (`DEFAULT_MODELS`) | GPT-4o, Claude Sonnet 4, Gemini 2.5 Flash | Overridable per request via `model` |
+| Default models | `types/index.ts` (`DEFAULT_MODELS`) | `gpt-4o`, `claude-sonnet-4-6`, `gemini-3.8-flash` | Overridable per request via `model` |
 
-**Embedding model choice** (already decided for you): Voyage `voyage-code-4` at 1024 dims — code-specialized, and its free tier (≈200M tokens) covers dozens of large repos. Switching models later requires resizing `chunks.embedding`, recreating the IVFFlat index + RPC, and re-indexing everything (see the migration file for the pattern).
+**Embedding model choice:** Google `gemini-embedding-2` (768 dims, truncated from native 3072) via the AI Studio REST API — needs the platform `GEMINI_EMBEDDING_API_KEY` (free tier, same key as Gemini chat). Batching + 4s pacing keep usage inside the free tier (100 RPM / 30K TPM / 1K RPD). Run `npm run benchmark:embeddings` for a live smoke test (5 chunks, dimension + sanity assertions).
+
+Embedding notes:
+
+- Indexing and chat queries share one key, so they go through one serialized queue; chat queries outrank indexing batches and wait behind at most one in-flight request.
+- Documents embed with `RETRIEVAL_DOCUMENT`, questions with `RETRIEVAL_QUERY`; both live in the same 768-d space.
+- Every ready index is stamped with `embedding_model`/`embedding_dimensions` in `repos.metadata`; chat returns 409 on a stamped index built by another provider instead of mixing vector spaces.
+- To compare against Voyage: set `EMBEDDING_PROVIDER=voyage` + `VOYAGE_API_KEY` (needs the 1024-dim schema — migration-001 era) and re-index. Never mix providers without re-indexing.
+- Switching models later requires resizing `chunks.embedding`, recreating the IVFFlat index + RPC, and re-indexing everything (see migration-003 for the pattern).
 
 ## 🧠 Key implementation notes
 
@@ -408,27 +427,30 @@ Read this before changing code — these are the non-obvious decisions and traps
 
 1. **Next.js 16 is not classic Next.js.** Route guards live in **`proxy.ts`** (the `middleware.ts` convention is deprecated). Per repo rules, read the relevant guide in `node_modules/next/dist/docs/` before writing framework code, and heed deprecation notices.
 2. **Chat transport must stay static.** `useChat` instantiates its `Chat` (capturing your transport) exactly once on first render — a `body()` closure over React state sends **first-render values forever** (`api_key: ''` → 400). Request fields travel via `sendMessage(text, { body })` per request. Never move them back into the transport constructor.
-3. **BYOK keys are never stored.** The key rides the request body, is used for one `streamChat()` call, and is discarded. The only platform-owned key is `VOYAGE_API_KEY` (embeddings).
+3. **BYOK keys are never stored.** The key rides the request body, is used for one `streamChat()` call, and is discarded. The only platform-owned keys are the embedding keys (`VOYAGE_API_KEY` / `GEMINI_EMBEDDING_API_KEY`), selected by `EMBEDDING_PROVIDER`.
 4. **Two Supabase clients, never mixed:** `lib/supabase/client.ts` (browser, anon key, RLS-bound, Clerk JWT injected) vs `lib/supabase/service.ts` (server-only service role, bypasses RLS). Importing the service client in a client component would leak it to the browser.
 5. **Indexing is fire-and-forget.** The API returns `pending` immediately and pipelines in the background; the client polls. There is no queue, no resume, no progress persistence beyond counts.
 6. **Conversation continuity** relies on the `x-conversation-id` response header: the client sends `conversation_id: null` once, the server creates the conversation and returns its ID in the header, and subsequent sends reuse it.
 7. **Reindex duplicates.** The dashboard "re-index" button inserts a *new* repo row rather than refreshing in place — delete first, then re-add.
 8. **`users.github_token` is never synced.** The column exists for per-user GitHub OAuth, but no code writes it; indexing authenticates via the server-side `GITHUB_TOKEN` env var. Per-user private-repo OAuth is the planned production follow-up.
 9. **Payments are geo-routed, never user-chosen.** `ipapi.co` maps the client IP to a country (localhost → Stripe); keep it that way.
+10. **Embeddings are provider-dispatched, Gemini by default.** `lib/rag/embedder.ts` routes to `./gemini` (API) or `./voyage` (API) per `EMBEDDING_PROVIDER`. Never add a silent cross-provider fallback — different providers mean different vector spaces. The 768/1024 dimension must always match the DB column; the model stamps every index so chat can refuse mismatches (409).
 
 ## 🩺 Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | GitHub `403` during indexing | Anonymous API quota (60/hr) exhausted — no token | Set `GITHUB_TOKEN` in `.env.local` and restart dev (5,000/hr) |
-| `expected 768/1536 dimensions, not 1024` | DB column predates the Voyage migration | Run `lib/supabase/migration-001-voyage-1024.sql`, delete + re-add repos |
+| `different vector dimensions …` (chat) | Index built by the other embedding provider | Delete + re-add the repo; check the column width matches the provider (768 gemini / 1024 voyage) |
+| `expected 768 dimensions, not …` (indexing) | DB column predates the Gemini migration, or provider flipped without re-indexing | Run `lib/supabase/migration-003-gemini-768.sql`, delete + re-add repos |
+| `The local embedding provider was removed` (indexing) | `.env.local` still has `EMBEDDING_PROVIDER=local` from an older checkout | Set `EMBEDDING_PROVIDER=gemini` + `GEMINI_EMBEDDING_API_KEY`, restart dev |
 | Repo page stuck on "Loading repository" | Supabase doesn't trust Clerk JWTs → RLS denies all browser reads | Supabase → Authentication → Third-Party Auth → enable Clerk + set domain |
 | Dashboard shows no repos (but indexing works) | Same RLS cause as above | Same fix; a banner now surfaces query errors |
 | Chat 400 `Missing required fields: …` | A field didn't reach the server (empty key, regressed transport, …) | The error names the field; check key input and the transport note above |
 | Chat sends but nothing streams, no provider usage | Request rejected before the LLM (see banner) | Read the banner error text; check provider key and plan limits |
 | `Multiple GoTrueClient instances` warning | More than one browser Supabase client constructed | Should not happen (singleton); report if you see it |
 | `npm ci` fails (lockfile out of sync) | Committed lockfile drifted from `package.json` | Use `npm install` to re-sync |
-| Slow indexing (large repos) | Voyage free tier ≈20 chunks/min (10k TPM cap) | Expected on free tier; raise Voyage limits or shrink scope |
+| Slow indexing (large repos) | Gemini free tier pacing: 4s between requests | Expected on free tier; ~15 chunks/min on big repos |
 | `commander EBADENGINE` warning on install | Transitive dep wants Node ≥22; repo runs on Node 20 | Harmless — ignore, or use Node 22 |
 
 ## 📜 Scripts
@@ -439,6 +461,8 @@ Read this before changing code — these are the non-obvious decisions and traps
 | `npm run build` | Production build |
 | `npm run start` | Serve a production build |
 | `npm run lint` | ESLint (Next core-web-vitals + TypeScript) |
+| `npm test` | node:test embedding unit tests (offline, fast) |
+| `npm run benchmark:embeddings` | Live embedding smoke test (dims, throughput, sanity) |
 | `npx tsc --noEmit` | Full typecheck (must stay clean) |
 
 Conventions: `tsc` must be clean; keep every file you touch at **zero ESLint errors** (the repo-wide run still has pre-existing findings in untouched files — don't add new ones). Types live in `types/index.ts`; path alias is `@/*`.
@@ -448,7 +472,7 @@ Conventions: `tsc` must be clean; keep every file you touch at **zero ESLint err
 - [ ] **Per-user GitHub OAuth sync** — populate `users.github_token` from Clerk so private repos work per user (currently server `GITHUB_TOKEN` only).
 - [ ] **Durable indexing pipeline** — move off fire-and-forget to a queue (Inngest/Trigger.dev/pg-boss) with resume + real progress.
 - [ ] **Reindex in place** — update the existing row instead of inserting a duplicate.
-- [ ] **Tests + CI** — no harness yet; `node:test`/Vitest + GitHub Actions wanted.
+- [ ] **CI** — `node:test` suite exists (`tests/embedder.test.ts`, via `npm test`); GitHub Actions wiring still wanted.
 - [ ] **Share/export UI** — `is_public` and plan flags exist, but no share-link or export UI is built.
 - [ ] **Auto summaries** — `metadata.summary`/`architecture` fields exist but nothing generates them yet.
 

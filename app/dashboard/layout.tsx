@@ -3,8 +3,9 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { auth } from '@clerk/nextjs/server';
 import { UserButton } from '@clerk/nextjs';
-import { Code2, LayoutDashboard, CreditCard, ShieldAlert } from 'lucide-react';
+import { LayoutDashboard } from 'lucide-react';
 import { Providers } from '@/components/providers';
+import { Brand } from '@/components/brand';
 
 export default async function DashboardLayout({
   children,
@@ -18,32 +19,29 @@ export default async function DashboardLayout({
 
   return (
     <Providers>
-      <div className="flex flex-col min-h-screen bg-background">
-        {/* Header Navbar */}
-        <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
-          <div className="flex items-center justify-between px-6 py-4 max-w-7xl mx-auto w-full">
-            <Link href="/" className="flex items-center gap-2 group">
-              <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-                <Code2 className="w-4 h-4 text-primary-foreground" />
-              </div>
-              <span className="text-lg font-semibold tracking-tight">DevAsk</span>
+      <div className="flex min-h-screen flex-col bg-background">
+        <header className="sticky top-0 z-50 border-b border-border bg-background/90 backdrop-blur-md">
+          <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between px-4 sm:px-6">
+            <Link href="/" className="flex items-center" aria-label="DevAsk home">
+              <Brand />
             </Link>
 
-            <div className="flex items-center gap-6">
-              <nav className="flex items-center gap-4 text-sm font-medium">
+            <div className="flex items-center gap-4">
+              <nav className="flex items-center text-[13.5px] font-medium" aria-label="Workspace">
                 <Link
                   href="/dashboard"
-                  className="flex items-center gap-1.5 text-foreground hover:text-primary transition-colors"
+                  className="flex items-center gap-1.5 text-foreground transition-colors hover:text-muted-foreground"
                 >
-                  <LayoutDashboard className="w-4 h-4" /> Dashboard
+                  <LayoutDashboard className="h-4 w-4" />
+                  <span className="hidden sm:inline">Dashboard</span>
                 </Link>
               </nav>
 
-              <div className="flex items-center gap-2 border-l border-border pl-6">
+              <div className="border-l border-border pl-4">
                 <UserButton
                   appearance={{
                     elements: {
-                      userButtonAvatarBox: 'w-8 h-8 border border-border',
+                      userButtonAvatarBox: 'h-7 w-7 border border-border',
                     },
                   }}
                 />
@@ -52,8 +50,7 @@ export default async function DashboardLayout({
           </div>
         </header>
 
-        {/* Dashboard Main Viewport */}
-        <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-8">
+        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
           {children}
         </main>
       </div>

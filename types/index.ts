@@ -15,6 +15,9 @@ export type PaymentProvider = 'stripe' | 'razorpay';
 
 export type MessageRole = 'user' | 'assistant';
 
+/** RAG embedding backend — see lib/rag/embedder.ts (EMBEDDING_PROVIDER). */
+export type EmbeddingProvider = 'gemini' | 'voyage';
+
 // --- Database row types (mirror the Supabase schema) ---
 
 export interface User {
@@ -48,6 +51,8 @@ export interface RepoMetadata {
   total_chunks?: number;
   primary_language?: string;
   error_message?: string;
+  embedding_model?: string;         // Model id that built this index (space tag)
+  embedding_dimensions?: number;    // Vector width of this index
 }
 
 export interface Chunk {
@@ -55,7 +60,8 @@ export interface Chunk {
   repo_id: string;
   file_path: string;
   content: string;
-  // embedding is vector(1024) — not sent to client, only used server-side
+  // embedding is vector(768) with the gemini provider (vector(1024) with
+  // voyage) — not sent to client, only used server-side
   created_at: string;
 }
 
@@ -146,7 +152,7 @@ export interface LLMConfig {
 export const DEFAULT_MODELS: Record<LLMProvider, string> = {
   anthropic: 'claude-sonnet-4-6',
   openai: 'gpt-4o',
-  gemini: 'gemini-2.5-flash',
+  gemini: 'gemini-3.8-flash',
 } as const;
 
 // --- Plan feature gates ---

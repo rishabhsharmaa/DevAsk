@@ -1,14 +1,21 @@
 /**
  * File-aware text chunker for RAG indexing.
- * 
+ *
  * Strategy:
- * - Target ~500 tokens per chunk (≈2000 chars, using 4 chars/token heuristic)
+ * - Target ~470 code-tokens per chunk (≈1500 chars; code tokenizes denser
+ *   than prose, roughly 3 chars/token for BERT-style tokenizers)
  * - 50-token overlap (≈200 chars) between adjacent chunks
  * - Tries to split at natural boundaries (blank lines, closing braces)
  * - Each chunk is tagged with file path + line range for citations
+ *
+ * The 1500-char target keeps chunks small for retrieval granularity: one
+ * chunk ≈ one citable unit, and small chunks pack efficiently into embedding
+ * batches. (API embedding contexts are far larger, so nothing truncates;
+ * the 2000-char target of the Voyage era was dropped for tighter matches.)
  */
 
-const TARGET_CHUNK_SIZE = 2000;    // ~500 tokens in chars
+// ~470 code-tokens in chars — see note above (model limit: 512 tokens).
+const TARGET_CHUNK_SIZE = 1500;
 const OVERLAP_SIZE = 200;          // ~50 tokens overlap
 const MIN_CHUNK_SIZE = 100;        // Don't create tiny chunks
 
@@ -70,6 +77,13 @@ export function chunkFile(filePath: string, content: string): TextChunk[] {
       start_line: currentStart + 1,   // 1-indexed
       end_line: currentEnd,
     });
+
+    // Terminal chunk consumed the file: stop. Without this, the overlap
+    // backtrack below re-slices the tail one line at a time, emitting one
+    // junk sliver chunk per line (~+overlapLines rows per file that waste
+    // embeddings and pollute retrieval). Overlap between real chunks below
+    // is unaffected.
+    if (currentEnd >= lines.length) break;
 
     // Move forward, accounting for overlap
     const overlapLines = calculateOverlapLines(lines, currentEnd, OVERLAP_SIZE);

@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { supabaseAdmin } from '@/lib/supabase/service';
 import { retrieveRelevantChunks, buildContextPrompt } from '@/lib/rag/retriever';
+import { getActiveModelName } from '@/lib/rag/embedder';
 import { streamChat } from '@/lib/llm';
 import { extractLastUserText } from '@/lib/llm/extract-user-text';
-import { PLAN_LIMITS } from '@/types';
+import { PLAN_LIMITS, type RepoMetadata } from '@/types';
 import type { ModelMessage } from 'ai';
 
 export async function POST(req: NextRequest) {
@@ -37,7 +38,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 1. Get user and verify plan limits
-    const { data: userRow, error: userError } = await supabaseAdmin
+    const { data: userRow } = await supabaseAdmin
       .from('users')
       .select('plan')
       .eq('id', userId)
@@ -63,6 +64,24 @@ export async function POST(req: NextRequest) {
 
     if (repoError || !repo) {
       return NextResponse.json({ error: 'Repository not found or unauthorized.' }, { status: 404 });
+    }
+
+    // Refuse to query an index built by a different embedding model —
+    // vectors from different providers live in different vector spaces,
+    // so cross-model retrieval would return nonsense. Unstamped (legacy)
+    // indexes are allowed through; the 002 migration wiped their vectors.
+    const repoModel = (repo.metadata as RepoMetadata | null)?.embedding_model;
+    const activeModel = getActiveModelName();
+    if (repoModel && repoModel !== activeModel) {
+      return NextResponse.json(
+        {
+          error:
+            `This repository was indexed with "${repoModel}" but the server is ` +
+            `running "${activeModel}". Delete the repo and re-add it to re-index ` +
+            `with the current embedding model.`,
+        },
+        { status: 409 }
+      );
     }
 
     // 3. Handle conversation creation/retrieval

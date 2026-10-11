@@ -10,7 +10,31 @@ import type { RetrievedChunk } from '@/types';
  */
 
 const DEFAULT_TOP_K = 10;
+// NOTE: 0.3 was tuned for Voyage voyage-code-4 similarity scores. Different
+// embedding models distribute cosine scores differently, so re-evaluate this
+// threshold against Gemini (see citations' match % in the UI, or the dev log
+// line below). Override without code changes via RETRIEVAL_THRESHOLD.
 const DEFAULT_THRESHOLD = 0.3;
+
+/**
+ * Detect Postgres/pgvector dimension errors: thrown when a query vector's
+ * width differs from the indexed column — i.e. the index was built by a
+ * different embedding model and must be rebuilt. Pure — easy to probe.
+ */
+export function isDimensionMismatchMessage(message: string): boolean {
+  return /different vector dimensions|expected \d+ dimensions?/i.test(message);
+}
+
+/**
+ * Resolve the similarity threshold from the environment.
+ * Pure function of `env` (default: process.env) so it is easy to probe.
+ */
+export function resolveRetrievalThreshold(
+  env: Record<string, string | undefined> = process.env
+): number {
+  const raw = Number(env.RETRIEVAL_THRESHOLD);
+  return Number.isFinite(raw) ? raw : DEFAULT_THRESHOLD;
+}
 
 /**
  * Retrieve the most relevant chunks for a given query.
@@ -29,19 +53,57 @@ export async function retrieveRelevantChunks(
   const queryEmbedding = await generateQueryEmbedding(query);
 
   // 2. Call the Supabase RPC function for similarity search
+  const threshold = resolveRetrievalThreshold();
   const { data, error } = await supabaseAdmin.rpc('match_chunks', {
     query_embedding: queryEmbedding,
     target_repo_id: repoId,
-    match_threshold: DEFAULT_THRESHOLD,
+    match_threshold: threshold,
     match_count: topK,
   });
 
   if (error) {
     console.error('Retrieval error:', error);
+    if (error.message && isDimensionMismatchMessage(error.message)) {
+      throw new Error(
+        'Embedding dimension mismatch: this index was built with a different ' +
+          `embedding model (${error.message}). Delete the repo and re-add it to re-index.`
+      );
+    }
     throw new Error(`Failed to retrieve chunks: ${error.message}`);
   }
 
-  return (data ?? []).map((row: {
+  // 3. Fallback: broad questions ("summarize this repo") can score below
+  // the threshold against every chunk. Rather than hand the model an
+  // empty context, take the closest chunks regardless of score — the
+  // model can judge relevance, and the UI shows the low match %.
+  let rows = data ?? [];
+  if (rows.length === 0) {
+    const fallback = await supabaseAdmin.rpc('match_chunks', {
+      query_embedding: queryEmbedding,
+      target_repo_id: repoId,
+      match_threshold: -1,
+      match_count: topK,
+    });
+    if (!fallback.error && fallback.data) {
+      rows = fallback.data;
+    }
+  }
+
+  // Dev-only score inspection: one aggregated line per query (no content).
+  if (process.env.NODE_ENV !== 'production') {
+    const top = rows
+      .slice(0, 3)
+      .map(
+        (r: { file_path: string; similarity: number }) =>
+          `${r.file_path} ${(r.similarity * 100).toFixed(1)}%`
+      )
+      .join(', ');
+    console.info(
+      `[retrieval] ${rows.length} chunk(s), threshold=${threshold}, top: ${top || 'none'}`
+    );
+  }
+
+  return rows.map((row: {
     id: string;
     repo_id: string;
     file_path: string;
