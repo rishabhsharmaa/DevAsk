@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { supabaseAdmin } from '@/lib/supabase/service';
 import { retrieveRelevantChunks, buildContextPrompt } from '@/lib/rag/retriever';
@@ -141,27 +141,29 @@ export async function POST(req: NextRequest) {
       systemPrompt
     );
 
-    // 7. Fire-and-forget: Persist assistant message when streaming completes
+    // 7. Persist the assistant message once streaming completes. This runs
+    // inside `after()` for the same reason as indexing: a floating promise
+    // is frozen when the response ends on serverless (Vercel), silently
+    // losing the saved reply. Awaiting inside the callback keeps it alive.
     const sourceChunksJson = chunks.map((chunk) => ({
       file_path: chunk.file_path,
       content: chunk.content,
       similarity: chunk.similarity,
     }));
 
-    result.text
-      .then(
-        async (fullText) => {
-          await supabaseAdmin.from('messages').insert({
-            conversation_id: conversationId,
-            role: 'assistant',
-            content: fullText,
-            source_chunks: sourceChunksJson,
-          });
-        },
-        (err) => {
-          console.error('Error saving assistant message to DB:', err);
-        }
-      );
+    after(async () => {
+      try {
+        const fullText = await result.text;
+        await supabaseAdmin.from('messages').insert({
+          conversation_id: conversationId,
+          role: 'assistant',
+          content: fullText,
+          source_chunks: sourceChunksJson,
+        });
+      } catch (err) {
+        console.error('Error saving assistant message to DB:', err);
+      }
+    });
 
     // Return the stream response with custom headers for client correlation
     const response = result.toUIMessageStreamResponse();

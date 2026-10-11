@@ -1,7 +1,13 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { supabaseAdmin } from '@/lib/supabase/service';
 import { parseGitHubUrl, createOctokitClient, fetchAllFiles, detectLanguage } from '@/lib/github/client';
+
+/**
+ * Cap the indexing run (response + `after()` background work). 60s is the
+ * Vercel Hobby ceiling — raise toward 300 on Pro for larger repos.
+ */
+export const maxDuration = 60;
 import { chunkFiles } from '@/lib/rag/chunker';
 import {
   generateEmbeddings,
@@ -200,8 +206,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Failed to initialize repository record.' }, { status: 500 });
     }
 
-    // Trigger async background indexing (fire-and-forget)
-    indexRepoBackground(newRepo.id, userId, url, owner, name, gitHubToken);
+    // Run indexing via `after()`: a bare fire-and-forget call is frozen the
+    // instant this response ends on serverless (Vercel), leaving the repo
+    // stuck at "indexing" forever. `after()` extends the invocation (up to
+    // maxDuration above) so batches keep embedding after we respond.
+    // indexRepoBackground never rejects (it catches everything into the
+    // repo row), so there is nothing to await or .catch() here.
+    after(() => indexRepoBackground(newRepo.id, userId, url, owner, name, gitHubToken));
 
     return NextResponse.json({
       repo_id: newRepo.id,

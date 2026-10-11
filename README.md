@@ -382,7 +382,7 @@ Read this before changing code — these are the non-obvious decisions and traps
 2. **Chat transport must stay static.** `useChat` instantiates its `Chat` (capturing your transport) exactly once on first render — a `body()` closure over React state sends **first-render values forever** (`api_key: ''` → 400). Request fields travel via `sendMessage(text, { body })` per request. Never move them back into the transport constructor.
 3. **BYOK keys are never stored.** The key rides the request body, is used for one `streamChat()` call, and is discarded. The only platform-owned keys are the embedding keys (`VOYAGE_API_KEY` / `GEMINI_EMBEDDING_API_KEY`), selected by `EMBEDDING_PROVIDER`.
 4. **Two Supabase clients, never mixed:** `lib/supabase/client.ts` (browser, anon key, RLS-bound, Clerk JWT injected) vs `lib/supabase/service.ts` (server-only service role, bypasses RLS). Importing the service client in a client component would leak it to the browser.
-5. **Indexing is fire-and-forget.** The API returns `pending` immediately and pipelines in the background; the client polls. There is no queue, no resume, no progress persistence beyond counts.
+5. **Indexing runs in `after()`, not bare fire-and-forget.** The API returns `pending` immediately and pipelines after the response; the client polls. A floating promise would freeze the instant the response ends on serverless (Vercel) — `after()` extends the invocation up to `maxDuration = 60` (the Hobby ceiling; raise toward 300 on Pro). There is no queue, no resume, no progress persistence beyond counts — a repo that outlives the cap stalls at `indexing` with partial chunks.
 6. **Conversation continuity** relies on the `x-conversation-id` response header: the client sends `conversation_id: null` once, the server creates the conversation and returns its ID in the header, and subsequent sends reuse it.
 7. **Reindex duplicates.** The dashboard "re-index" button inserts a *new* repo row rather than refreshing in place — delete first, then re-add.
 8. **`users.github_token` is never synced.** The column exists for per-user GitHub OAuth, but no code writes it; indexing authenticates via the server-side `GITHUB_TOKEN` env var. Per-user private-repo OAuth is the planned production follow-up.
@@ -403,6 +403,8 @@ Read this before changing code — these are the non-obvious decisions and traps
 | `Multiple GoTrueClient instances` warning | More than one browser Supabase client constructed | Should not happen (singleton); report if you see it |
 | `npm ci` fails (lockfile out of sync) | Committed lockfile drifted from `package.json` | Use `npm install` to re-sync |
 | Slow indexing (large repos) | Gemini free tier pacing: 4s between requests | Expected on free tier; ~15 chunks/min on big repos |
+| Index stuck at `indexing`, Chunks 0, on Vercel | Background work frozen at response end (pre-`after()` code) | Pull latest (indexing runs in `after()`), redeploy, delete + re-add the repo |
+| Index stalls with partial chunks on Vercel | Repo outlived the 60s Hobby `maxDuration` cap | Index a smaller repo, raise `maxDuration` on Pro, or host on Railway/Render/VPS |
 | `commander EBADENGINE` warning on install | Transitive dep wants Node ≥22; repo runs on Node 20 | Harmless — ignore, or use Node 22 |
 
 ## 📜 Scripts
