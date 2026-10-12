@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useUser, useAuth } from '@clerk/nextjs';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import { ArrowLeft, PanelLeft, RefreshCw } from 'lucide-react';
+import { ArrowLeft, PanelLeft, PanelRight, RefreshCw } from 'lucide-react';
 import { supabase, setBrowserTokenGetter } from '@/lib/supabase/client';
 import { FileExplorer } from '@/components/file-explorer';
 import { ChatInput } from '@/components/chat/chat-input';
@@ -19,6 +19,7 @@ import { InlineError } from '@/components/state';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { LLMProvider, Repo, SourceChunk, Message } from '@/types';
 
 /** DB message mapped into the chat shape (assignable to the AI SDK UIMessage). */
@@ -93,6 +94,10 @@ export default function RepoChatPage({
   const [apiKey, setApiKey] = useState('');
   const [providerOpen, setProviderOpen] = useState(false);
   const [explorerOpen, setExplorerOpen] = useState(false);
+  // Desktop sidebar visibility — collapsing both gives a focus mode where
+  // the conversation takes the full width. Mobile keeps the drawer.
+  const [leftOpen, setLeftOpen] = useState(true);
+  const [rightOpen, setRightOpen] = useState(true);
   const [activeCodeViewer, setActiveCodeViewer] = useState<{ path: string; content: string } | null>(null);
   const [activeCitation, setActiveCitation] = useState<SourceChunk | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -571,6 +576,17 @@ export default function RepoChatPage({
           >
             <PanelLeft className="h-4 w-4" />
           </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="hidden lg:inline-flex"
+            onClick={() => setLeftOpen((v) => !v)}
+            aria-label={leftOpen ? 'Collapse file explorer' : 'Expand file explorer'}
+            aria-expanded={leftOpen}
+            title={leftOpen ? 'Collapse explorer' : 'Expand explorer'}
+          >
+            <PanelLeft className={cn('h-4 w-4', !leftOpen && 'text-muted-foreground')} />
+          </Button>
           <Link
             href="/dashboard"
             className="hidden flex-shrink-0 items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
@@ -590,7 +606,18 @@ export default function RepoChatPage({
           </div>
         </div>
 
-        <div className="flex flex-shrink-0 items-center">
+        <div className="flex flex-shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="hidden xl:inline-flex"
+            onClick={() => setRightOpen((v) => !v)}
+            aria-label={rightOpen ? 'Collapse repository index' : 'Expand repository index'}
+            aria-expanded={rightOpen}
+            title={rightOpen ? 'Collapse index panel' : 'Expand index panel'}
+          >
+            <PanelRight className={cn('h-4 w-4', !rightOpen && 'text-muted-foreground')} />
+          </Button>
           <ProviderSelector
             provider={provider}
             setProvider={setProvider}
@@ -608,18 +635,30 @@ export default function RepoChatPage({
         </div>
       )}
 
-      {/* Three regions — collapse gracefully by viewport.
-          Each pane is an independent surface: fixed tracks never yield to
-          content (min-w-0 + overflow clip on asides), so explorer expansion
-          cannot resize or reflow the conversation. */}
-      <div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-x-clip lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[260px_minmax(0,1fr)_280px]">
-        {/* LEFT: explorer (drawer below lg) */}
-        <aside className="hidden min-h-0 min-w-0 flex-col overflow-hidden border-r border-border lg:flex" aria-label="File explorer">
-          <FileExplorer files={files} onFileClick={handleFileClick} selectedPath={activeCodeViewer?.path} />
+      {/* Three regions — collapse gracefully by viewport and by toggle.
+          Each pane is an independent surface: asides keep fixed widths that
+          never yield to content (shrink-0 + overflow clip), so explorer
+          expansion cannot resize or reflow the conversation. Collapsing
+          animates width to zero; the fixed-width inner wrapper clips instead
+          of reflowing mid-transition. */}
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        {/* LEFT: explorer (drawer below lg, collapsible on desktop) */}
+        <aside
+          aria-label="File explorer"
+          inert={!leftOpen}
+          className={cn(
+            'hidden min-h-0 shrink-0 flex-col overflow-hidden border-r border-border transition-[width,opacity,border-color] duration-200 ease-out motion-reduce:transition-none lg:flex',
+            leftOpen ? 'w-[260px] opacity-100' : 'w-0 border-transparent opacity-0'
+          )}
+        >
+          <div className="flex h-full min-h-0 w-[260px] flex-col">
+            <FileExplorer files={files} onFileClick={handleFileClick} selectedPath={activeCodeViewer?.path} />
+          </div>
         </aside>
 
-        {/* CENTER: conversation */}
-        <div className="flex min-h-0 min-w-0 flex-col">
+        {/* CENTER: conversation — the only pane that grows; the input
+            below stays pinned while the message list above scrolls. */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <MessageList
               messages={uiMessagesForList}
@@ -648,8 +687,16 @@ export default function RepoChatPage({
           </div>
         </div>
 
-        {/* RIGHT: repository index (xl and up) */}
-        <aside className="hidden min-h-0 min-w-0 flex-col overflow-hidden border-l border-border xl:flex" aria-label="Repository index">
+        {/* RIGHT: repository index (xl and up, collapsible) */}
+        <aside
+          aria-label="Repository index"
+          inert={!rightOpen}
+          className={cn(
+            'hidden min-h-0 shrink-0 flex-col overflow-hidden border-l border-border transition-[width,opacity,border-color] duration-200 ease-out motion-reduce:transition-none xl:flex',
+            rightOpen ? 'w-[280px] opacity-100' : 'w-0 border-transparent opacity-0'
+          )}
+        >
+          <div className="flex h-full min-h-0 w-[280px] flex-col">
           <div className="flex-shrink-0 border-b border-border p-4">
             <p className="label-micro text-muted-foreground">Index</p>
             <div className="mt-3">
@@ -711,6 +758,7 @@ export default function RepoChatPage({
                 ))}
               </div>
             )}
+          </div>
           </div>
         </aside>
       </div>

@@ -194,6 +194,13 @@
   .tabular {
     font-variant-numeric: tabular-nums;
   }
+  /* Viewport-locked app shell. The vh line is a fallback for browsers
+     without dynamic viewport units — without it the shell sizes to
+     content, the page scrolls, and inner panes trap the wheel. */
+  .app-shell {
+    height: 100vh;
+    height: 100dvh;
+  }
 }
 
 /* ============================================
