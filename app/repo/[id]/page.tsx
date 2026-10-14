@@ -1,12 +1,12 @@
 'use client';
 
-import React, { useState, useEffect, use, useMemo, useRef } from 'react';
+import React, { useState, useEffect, use, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useUser, useAuth } from '@clerk/nextjs';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import { ArrowLeft, PanelLeft, PanelRight, RefreshCw } from 'lucide-react';
+import { ArrowLeft, PanelLeft, PanelRight } from 'lucide-react';
 import { supabase, setBrowserTokenGetter } from '@/lib/supabase/client';
 import { FileExplorer } from '@/components/file-explorer';
 import { ChatInput } from '@/components/chat/chat-input';
@@ -81,13 +81,6 @@ export default function RepoChatPage({
   const [liveChunkCount, setLiveChunkCount] = useState<number | null>(null);
   const [liveChunkTotal, setLiveChunkTotal] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
-
-  // Stall tracking: chunk counts frozen 30s+ on a run older than 90s mean
-  // the serverless execution died at maxDuration (see Resume below).
-  const lastProgressRef = useRef<{ count: number | null; at: number }>({ count: null, at: Date.now() });
-  const [stalled, setStalled] = useState(false);
-  const [isResuming, setIsResuming] = useState(false);
-  const [resumeError, setResumeError] = useState<string | null>(null);
 
   // UI / LLM State
   const [provider, setProvider] = useState<LLMProvider>('openai');
@@ -203,21 +196,6 @@ export default function RepoChatPage({
         if (typeof data.file_count === 'number') setLiveFileCount(data.file_count);
         if (typeof data.chunk_count === 'number') setLiveChunkCount(data.chunk_count);
         if (typeof data.metadata?.total_chunks === 'number') setLiveChunkTotal(data.metadata.total_chunks);
-
-        // Stall detection: healthy runs persist a batch every few seconds,
-        // so counts frozen 30s+ on a repo older than 90s mean the execution
-        // died at the 60s server cap. The age floor avoids false positives
-        // during slow crawls or API backoff windows.
-        const count = typeof data.chunk_count === 'number' ? data.chunk_count : null;
-        if (count !== lastProgressRef.current.count) {
-          lastProgressRef.current = { count, at: Date.now() };
-          setStalled(false);
-        } else {
-          const ageMs = Date.now() - new Date(repo.created_at).getTime();
-          if (!Number.isNaN(ageMs) && ageMs > 90_000 && Date.now() - lastProgressRef.current.at > 30_000) {
-            setStalled(true);
-          }
-        }
 
         if (data.index_status === 'ready') {
           clearInterval(interval);
@@ -388,28 +366,6 @@ export default function RepoChatPage({
     );
   };
 
-  // Resume a stalled indexing run (embeds only missing chunks server-side)
-  const handleResume = async () => {
-    if (isResuming) return;
-    setIsResuming(true);
-    setResumeError(null);
-    try {
-      const res = await fetch('/api/repo/resume', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repo_id: repoId }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Resume failed');
-      lastProgressRef.current = { count: lastProgressRef.current.count, at: Date.now() };
-      setStalled(false);
-    } catch (err) {
-      setResumeError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsResuming(false);
-    }
-  };
-
   // Open file content explorer
   const handleFileClick = async (filePath: string) => {
     setFileError(null);
@@ -537,20 +493,6 @@ export default function RepoChatPage({
                   API, paced for the free tier — large repos take a few minutes.
                   You can leave and come back.
                 </p>
-                {stalled && (
-                  <div className="mt-3 border border-signal/40 bg-signal/[6%] px-4 py-3">
-                    <p className="text-[13px] leading-relaxed">
-                      <span className="font-medium text-foreground">Indexing stalled.</span>{' '}
-                      The server run hit its time limit with chunks left. Resume
-                      continues from where it stopped — repeat until ready.
-                    </p>
-                    <Button size="sm" onClick={handleResume} disabled={isResuming} className="mt-2.5 gap-1.5 font-semibold">
-                      <RefreshCw className={`h-3.5 w-3.5 ${isResuming ? 'animate-spin' : ''}`} />
-                      {isResuming ? 'Resuming…' : 'Resume indexing'}
-                    </Button>
-                    {resumeError && <p className="mt-2 text-[13px] text-signal">{resumeError}</p>}
-                  </div>
-                )}
                 <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard')} className="mt-2 gap-1.5 px-0">
                   <ArrowLeft className="h-3.5 w-3.5" /> Return to dashboard
                 </Button>
