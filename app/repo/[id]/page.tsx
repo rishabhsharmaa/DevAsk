@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, use, useMemo } from 'react';
+import React, { useState, useEffect, use, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useUser, useAuth } from '@clerk/nextjs';
@@ -29,6 +29,14 @@ interface ChatMessageInit {
   parts: { type: 'text'; text: string }[];
   metadata: { source_chunks: SourceChunk[] | null };
 }
+
+/** Stall floors: only auto-resume a run older than 90s with no progress for 30s. */
+const AUTO_RESUME_MIN_AGE_MS = 90_000;
+const AUTO_RESUME_STALL_MS = 30_000;
+/** Spacing between auto-resume calls — a fresh run needs time to crawl + persist. */
+const AUTO_RESUME_COOLDOWN_MS = 45_000;
+/** Hard cap: a run that never advances is broken, not slow — stop trying. */
+const MAX_AUTO_RESUMES = 10;
 
 function elapsedSince(iso: string, now: number): string {
   const start = new Date(iso).getTime();
@@ -81,6 +89,17 @@ export default function RepoChatPage({
   const [liveChunkCount, setLiveChunkCount] = useState<number | null>(null);
   const [liveChunkTotal, setLiveChunkTotal] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+
+  // Auto-resume tracking: chunk counts frozen 30s+ on a run older than 90s
+  // mean the serverless execution died at maxDuration, so the client fires
+  // POST /api/repo/resume itself. Attempt counting lives in a ref so the
+  // polling interval (which never re-subscribes) always sees the true count;
+  // the state mirror is display-only.
+  const lastProgressRef = useRef<{ count: number | null; at: number }>({ count: null, at: Date.now() });
+  const resumeCooldownUntilRef = useRef(0);
+  const autoResumeCountRef = useRef(0);
+  const [autoResumeCount, setAutoResumeCount] = useState(0);
+  const [autoResumeGaveUp, setAutoResumeGaveUp] = useState(false);
 
   // UI / LLM State
   const [provider, setProvider] = useState<LLMProvider>('openai');
@@ -196,6 +215,33 @@ export default function RepoChatPage({
         if (typeof data.file_count === 'number') setLiveFileCount(data.file_count);
         if (typeof data.chunk_count === 'number') setLiveChunkCount(data.chunk_count);
         if (typeof data.metadata?.total_chunks === 'number') setLiveChunkTotal(data.metadata.total_chunks);
+
+        // Auto-resume: healthy runs persist a batch every few seconds, so a
+        // frozen count on an old run means the execution died at the 60s
+        // server cap — fire the resume endpoint ourselves. Attempts are
+        // capped and spaced (see constants above); a repo that reached a
+        // terminal state is left alone for the checks below.
+        const stillActive = data.index_status !== 'ready' && data.index_status !== 'failed';
+        const count = typeof data.chunk_count === 'number' ? data.chunk_count : null;
+        if (count !== lastProgressRef.current.count) {
+          lastProgressRef.current = { count, at: Date.now() };
+        } else if (stillActive) {
+          const ageMs = Date.now() - new Date(repo.created_at).getTime();
+          const quietMs = Date.now() - lastProgressRef.current.at;
+          if (
+            !Number.isNaN(ageMs) &&
+            ageMs > AUTO_RESUME_MIN_AGE_MS &&
+            quietMs > AUTO_RESUME_STALL_MS &&
+            Date.now() > resumeCooldownUntilRef.current
+          ) {
+            resumeCooldownUntilRef.current = Date.now() + AUTO_RESUME_COOLDOWN_MS;
+            if (autoResumeCountRef.current >= MAX_AUTO_RESUMES) {
+              setAutoResumeGaveUp(true);
+            } else {
+              void fireAutoResume();
+            }
+          }
+        }
 
         if (data.index_status === 'ready') {
           clearInterval(interval);
@@ -366,6 +412,23 @@ export default function RepoChatPage({
     );
   };
 
+  // Fire the resume endpoint without user interaction. It responds
+  // immediately (embedding continues in after()); progress — or its absence
+  // — shows up in later polls, which is what spaces and caps the attempts.
+  const fireAutoResume = async () => {
+    autoResumeCountRef.current += 1;
+    setAutoResumeCount(autoResumeCountRef.current);
+    try {
+      await fetch('/api/repo/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_id: repoId }),
+      });
+    } catch (err) {
+      console.error('Auto-resume request failed:', err);
+    }
+  };
+
   // Open file content explorer
   const handleFileClick = async (filePath: string) => {
     setFileError(null);
@@ -493,6 +556,23 @@ export default function RepoChatPage({
                   API, paced for the free tier — large repos take a few minutes.
                   You can leave and come back.
                 </p>
+                {autoResumeCount > 0 && !autoResumeGaveUp && (
+                  <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">
+                    <span className="font-medium text-foreground">Resuming automatically</span>{' '}
+                    (attempt {autoResumeCount}) — the server run hit its time limit. Keep this
+                    tab open until the index is ready.
+                  </p>
+                )}
+                {autoResumeGaveUp && (
+                  <div className="mt-3 border border-signal/40 bg-signal/[6%] px-4 py-3">
+                    <p className="text-[13px] leading-relaxed">
+                      <span className="font-medium text-foreground">Automatic resume gave up</span>{' '}
+                      after {MAX_AUTO_RESUMES} attempts without progress. This repo can&apos;t
+                      finish on the current hosting plan — delete it and index on Vercel Pro
+                      or another host.
+                    </p>
+                  </div>
+                )}
                 <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard')} className="mt-2 gap-1.5 px-0">
                   <ArrowLeft className="h-3.5 w-3.5" /> Return to dashboard
                 </Button>
