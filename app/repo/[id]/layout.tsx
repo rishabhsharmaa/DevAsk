@@ -30,7 +30,14 @@ export default async function RepoLayout({
 
   return (
     <Providers>
-      <div className="app-shell flex min-h-0 flex-1 flex-col overflow-hidden">
+      {/* Viewport lock via core utility + inline style only: h-screen
+          (100vh) is the fallback and inline 100dvh wins where supported.
+          Inline styles ship with the HTML and can't be dropped by the CSS
+          build, so this holds regardless of stylesheet behavior. */}
+      <div
+        className="flex h-screen min-h-0 w-full flex-1 flex-col overflow-hidden"
+        style={{ height: '100dvh' }}
+      >
         {children}
       </div>
     </Providers>

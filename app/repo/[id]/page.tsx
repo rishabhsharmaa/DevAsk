@@ -77,6 +77,17 @@ export default function RepoChatPage({
     setBrowserTokenGetter(getToken);
   }, [getToken]);
 
+  // Lock document scroll while the workspace is mounted: panes scroll
+  // internally, so the page itself must never scroll (this is what pins
+  // the composer in the viewport like ChatGPT). Removed on unmount so
+  // dashboard/landing keep normal page scroll.
+  useEffect(() => {
+    document.body.classList.add('has-app-shell');
+    return () => {
+      document.body.classList.remove('has-app-shell');
+    };
+  }, []);
+
   // DB States
   const [repo, setRepo] = useState<Repo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);

@@ -147,6 +147,13 @@
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
   }
+  /* App-shell pages (repo workspace) are fixed-height surfaces whose panes
+     scroll internally — the document itself must never scroll, so the
+     composer can never leave the viewport. Scoped via a body class the
+     repo page adds on mount (dashboard/landing keep page scroll). */
+  body.has-app-shell {
+    overflow: hidden;
+  }
   ::selection {
     background: oklch(0.76 0.125 88 / 28%);
   }
@@ -193,13 +200,6 @@
   }
   .tabular {
     font-variant-numeric: tabular-nums;
-  }
-  /* Viewport-locked app shell. The vh line is a fallback for browsers
-     without dynamic viewport units — without it the shell sizes to
-     content, the page scrolls, and inner panes trap the wheel. */
-  .app-shell {
-    height: 100vh;
-    height: 100dvh;
   }
 }
 
