@@ -108,7 +108,9 @@ export function MessageList({
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id;
 
   return (
-    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      {/* overflow-hidden doubles as the flex-minimum kill: automatic
+          minimums are zero by spec on non-visible overflow. */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}

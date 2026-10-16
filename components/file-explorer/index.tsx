@@ -78,7 +78,8 @@ export function FileExplorer({ files, onFileClick, selectedPath, className }: Fi
   const searching = search.length > 0;
 
   return (
-    <div className={cn('flex min-h-0 min-w-0 flex-1 flex-col bg-background', className)}>
+    <div className={cn('flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background', className)}>
+      {/* overflow-hidden doubles as the flex-minimum kill (see repo page). */}
       <div className="flex flex-col gap-2.5 border-b border-border p-3">
         <div className="flex items-center justify-between px-0.5">
           <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">

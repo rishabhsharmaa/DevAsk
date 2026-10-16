@@ -596,7 +596,7 @@ export default function RepoChatPage({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col bg-background">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background">
       {/* Workspace top bar — always answers "where am I?" */}
       <header className="flex h-13 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2">
@@ -673,7 +673,9 @@ export default function RepoChatPage({
           never yield to content (shrink-0 + overflow clip), so explorer
           expansion cannot resize or reflow the conversation. Collapsing
           animates width to zero; the fixed-width inner wrapper clips instead
-          of reflowing mid-transition. */}
+          of reflowing mid-transition. Every flex level also carries
+          non-visible overflow so automatic minimums are zero by spec,
+          independent of min-h-0 generating. */}
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {/* LEFT: explorer (drawer below lg, collapsible on desktop) */}
         <aside
@@ -684,14 +686,14 @@ export default function RepoChatPage({
             leftOpen ? 'w-[260px] opacity-100' : 'w-0 border-transparent opacity-0'
           )}
         >
-          <div className="flex h-full min-h-0 w-[260px] flex-col">
+          <div className="flex h-full min-h-0 w-[260px] flex-col overflow-hidden">
             <FileExplorer files={files} onFileClick={handleFileClick} selectedPath={activeCodeViewer?.path} />
           </div>
         </aside>
 
         {/* CENTER: conversation — the only pane that grows; the input
             below stays pinned while the message list above scrolls. */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <MessageList
               messages={uiMessagesForList}
@@ -729,7 +731,7 @@ export default function RepoChatPage({
             rightOpen ? 'w-[280px] opacity-100' : 'w-0 border-transparent opacity-0'
           )}
         >
-          <div className="flex h-full min-h-0 w-[280px] flex-col">
+          <div className="flex h-full min-h-0 w-[280px] flex-col overflow-hidden">
           <div className="flex-shrink-0 border-b border-border p-4">
             <p className="label-micro text-muted-foreground">Index</p>
             <div className="mt-3">
