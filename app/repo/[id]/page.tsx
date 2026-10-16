@@ -123,6 +123,8 @@ export default function RepoChatPage({
   const [rightOpen, setRightOpen] = useState(true);
   const [activeCodeViewer, setActiveCodeViewer] = useState<{ path: string; content: string } | null>(null);
   const [activeCitation, setActiveCitation] = useState<SourceChunk | null>(null);
+  const [viewerExpanded, setViewerExpanded] = useState(false);
+  const [citationExpanded, setCitationExpanded] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [initialMessages, setInitialMessages] = useState<ChatMessageInit[]>([]);
 
@@ -809,8 +811,13 @@ export default function RepoChatPage({
       </Sheet>
 
       {/* Code viewer dialog */}
-      <Dialog open={activeCodeViewer !== null} onOpenChange={(open) => !open && setActiveCodeViewer(null)}>
-        <DialogContent className="max-h-[85vh] max-w-4xl overflow-hidden p-0">
+      <Dialog open={activeCodeViewer !== null} onOpenChange={(open) => {
+        if (!open) {
+          setActiveCodeViewer(null);
+          setViewerExpanded(false);
+        }
+      }}>
+        <DialogContent className={cn('overflow-hidden p-0', viewerExpanded ? 'h-[90vh] w-[94vw] max-w-[1400px]' : 'max-h-[85vh] max-w-4xl')}>
           <DialogTitle className="sr-only">
             {activeCodeViewer ? `File: ${activeCodeViewer.path}` : 'File viewer'}
           </DialogTitle>
@@ -818,16 +825,23 @@ export default function RepoChatPage({
             <CodeViewer
               path={activeCodeViewer.path}
               content={activeCodeViewer.content}
-              className="max-h-[85vh] border-0"
+              className={cn(viewerExpanded ? 'h-[90vh] border-0' : 'max-h-[85vh] border-0')}
               headerClassName="pr-12"
+              expanded={viewerExpanded}
+              onToggleExpand={() => setViewerExpanded((v) => !v)}
             />
           )}
         </DialogContent>
       </Dialog>
 
       {/* Citation inspector dialog */}
-      <Dialog open={activeCitation !== null} onOpenChange={(open) => !open && setActiveCitation(null)}>
-        <DialogContent className="max-h-[80vh] max-w-3xl overflow-hidden p-0">
+      <Dialog open={activeCitation !== null} onOpenChange={(open) => {
+        if (!open) {
+          setActiveCitation(null);
+          setCitationExpanded(false);
+        }
+      }}>
+        <DialogContent className={cn('overflow-hidden p-0', citationExpanded ? 'h-[90vh] w-[94vw] max-w-[1400px]' : 'max-h-[80vh] max-w-3xl')}>
           <DialogTitle className="sr-only">
             {activeCitation ? `Cited source: ${activeCitation.file_path}` : 'Cited source'}
           </DialogTitle>
@@ -836,8 +850,10 @@ export default function RepoChatPage({
               path={activeCitation.file_path}
               content={activeCitation.content}
               similarity={activeCitation.similarity}
-              className="max-h-[80vh] border-0"
+              className={cn(citationExpanded ? 'h-[90vh] border-0' : 'max-h-[80vh] border-0')}
               headerClassName="pr-12"
+              expanded={citationExpanded}
+              onToggleExpand={() => setCitationExpanded((v) => !v)}
             />
           )}
         </DialogContent>

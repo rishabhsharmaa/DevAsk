@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Check, Copy, FileCode2 } from "lucide-react";
+import { Check, Copy, FileCode2, Maximize2, Minimize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function languageFromPath(path: string): string {
@@ -48,6 +48,8 @@ export function CodeViewer({
   similarity,
   className,
   headerClassName,
+  expanded,
+  onToggleExpand,
 }: {
   path: string;
   content: string;
@@ -55,6 +57,9 @@ export function CodeViewer({
   className?: string;
   /** Extra classes for the header row (e.g. room for a dialog close button). */
   headerClassName?: string;
+  /** Controlled expand state for the dialog toggle (button hidden without onToggleExpand). */
+  expanded?: boolean;
+  onToggleExpand?: () => void;
 }) {
   const [copied, setCopied] = React.useState(false);
   const lines = React.useMemo(() => content.split("\n"), [content]);
@@ -89,6 +94,17 @@ export function CodeViewer({
             <span className="border border-border bg-card px-1.5 py-0.5 font-mono text-[11px] tabular text-success">
               {Math.round(similarity * 100)}% match
             </span>
+          )}
+          {onToggleExpand && (
+            <button
+              type="button"
+              onClick={onToggleExpand}
+              className="inline-flex items-center gap-1 border border-border bg-card px-1.5 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+              aria-label={expanded ? 'Collapse code viewer' : 'Expand code viewer'}
+              title={expanded ? 'Collapse' : 'Expand'}
+            >
+              {expanded ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+            </button>
           )}
           <button
             type="button"
