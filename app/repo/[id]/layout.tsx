@@ -30,12 +30,14 @@ export default async function RepoLayout({
 
   return (
     <Providers>
-      {/* Viewport lock via core utility + inline style only: h-screen
-          (100vh) is the fallback and inline 100dvh wins where supported.
-          Inline styles ship with the HTML and can't be dropped by the CSS
-          build, so this holds regardless of stylesheet behavior. */}
+      {/* Viewport lock: definite height only — NOTE: no flex-1 here.
+          flex-basis % resolves to *content* (not this height) when the
+          parent (body) has indefinite height, which sizes the shell to its
+          content and bypasses the lock entirely. flex-none lets the height
+          apply: h-screen (100vh) fallback, inline 100dvh wins where
+          supported (ships with the HTML, undroppable by the CSS build). */}
       <div
-        className="flex h-screen min-h-0 w-full flex-1 flex-col overflow-hidden"
+        className="flex h-screen min-h-0 w-full flex-none flex-col overflow-hidden"
         style={{ height: '100dvh' }}
       >
         {children}
